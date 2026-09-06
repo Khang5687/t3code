@@ -180,6 +180,7 @@ const ProviderPrepareConversationRollbackInput = Schema.Struct({
   threadId: ThreadId,
   cwd: Schema.String,
   numTurns: NonNegativeInt,
+  targetTurnId: Schema.NullOr(TurnId),
 });
 const ProviderRollbackConversationInput = Schema.Struct({
   plan: ConversationRollbackPlan,
@@ -1931,13 +1932,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         resumeCursor: activeSession?.resumeCursor ?? binding?.resumeCursor ?? null,
         ...(modelSelection !== undefined ? { modelSelection } : {}),
       };
-      const target =
-        input.numTurns === 0
-          ? null
-          : yield* routed.adapter.conversationRollback.prepare({
-              ...source,
-              numTurns: input.numTurns,
-            });
+      const target = yield* routed.adapter.conversationRollback.prepare({
+        ...source,
+        targetTurnId: input.targetTurnId,
+      });
       return { source, target, numTurns: input.numTurns };
     });
 
@@ -1948,9 +1946,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ConversationRollbackPlan,
         payload: rawPlan,
       });
-      if (plan.numTurns === 0) {
-        return plan.source.resumeCursor ?? null;
-      }
       const instanceId = yield* requireBindingInstanceId(
         "ProviderService.forkConversation",
         plan.source,
@@ -1975,9 +1970,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       payload: rawInput,
     });
     const plan = input.plan;
-    if (plan.numTurns === 0) {
-      return;
-    }
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
       const threadId = plan.source.threadId;

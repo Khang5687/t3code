@@ -255,7 +255,9 @@ function makeFakeCodexAdapter(
 
   const prepareConversationRollback = vi.fn<
     NonNullable<ProviderAdapterShape<ProviderAdapterError>["conversationRollback"]>["prepare"]
-  >((input) => Effect.succeed({ sourceCursor: input.resumeCursor, numTurns: input.numTurns }));
+  >((input) =>
+    Effect.succeed({ sourceCursor: input.resumeCursor, targetTurnId: input.targetTurnId }),
+  );
   const forkConversation = vi.fn<
     NonNullable<ProviderAdapterShape<ProviderAdapterError>["conversationRollback"]>["fork"]
   >(() => Effect.succeed({ opaque: "forked-conversation" }));
@@ -1093,6 +1095,7 @@ unsupportedRollback.layer("ProviderServiceLive unsupported rewind", (it) => {
             threadId,
             cwd: fixtureCwd("project"),
             numTurns: 1,
+            targetTurnId: TurnId.make("retained-native-turn"),
           }),
         );
 
@@ -1133,6 +1136,7 @@ openCodeRewind.layer("ProviderServiceLive OpenCode rewind", (it) => {
           threadId,
           cwd: fixtureCwd("project"),
           numTurns: 1,
+          targetTurnId: TurnId.make("retained-native-turn"),
         })
         .pipe(Effect.flip);
       assert.instanceOf(error, ProviderValidationError);
@@ -1445,6 +1449,7 @@ it.effect(
           threadId: startedSession.threadId,
           cwd: fixtureCwd("project"),
           numTurns: 1,
+          targetTurnId: TurnId.make("retained-native-turn"),
         });
         const resumeCursor = yield* provider.forkConversation(plan);
         yield* provider.rollbackConversation({ plan, resumeCursor });
@@ -1625,6 +1630,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId: session.threadId,
         cwd: fixtureCwd("project"),
         numTurns: 0,
+        targetTurnId: TurnId.make("retained-native-turn"),
       });
       const resumeCursor = yield* provider.forkConversation(rollbackPlan);
       yield* provider.rollbackConversation({ plan: rollbackPlan, resumeCursor });
@@ -1651,7 +1657,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         };
         assert.equal(startPayload.provider, "codex");
         assert.equal(startPayload.cwd, fixtureCwd("project"));
-        assert.deepEqual(startPayload.resumeCursor, session.resumeCursor);
+        assert.deepEqual(startPayload.resumeCursor, { opaque: "forked-conversation" });
         assert.equal(startPayload.threadId, session.threadId);
       }
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
@@ -2072,6 +2078,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId,
         cwd: fixtureCwd("project"),
         numTurns: 1,
+        targetTurnId: TurnId.make("retained-native-turn"),
       });
       const resumeCursor = yield* provider.forkConversation(plan);
       yield* provider.stopSession({ threadId });
@@ -2118,6 +2125,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId: initial.threadId,
         cwd: fixtureCwd("project"),
         numTurns: 1,
+        targetTurnId: TurnId.make("retained-native-turn"),
       });
       const resumeCursor = yield* provider.forkConversation(rollbackPlan);
       yield* provider.rollbackConversation({ plan: rollbackPlan, resumeCursor });
@@ -2928,6 +2936,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         threadId: session.threadId,
         cwd: fixtureCwd("project"),
         numTurns: 1,
+        targetTurnId: TurnId.make("retained-native-turn"),
       });
       const resumeCursor = yield* provider.forkConversation(rollbackPlan);
       yield* provider.rollbackConversation({ plan: rollbackPlan, resumeCursor });
