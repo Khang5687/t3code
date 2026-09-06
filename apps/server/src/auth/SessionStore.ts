@@ -22,6 +22,7 @@ import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { ListenAddress } from "../listenAddress.ts";
 import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
@@ -487,7 +488,7 @@ export const make = Effect.gen(function* () {
   const cookieInput = {
     mode: serverConfig.mode,
     port: serverConfig.port,
-    host: serverConfig.host,
+    remoteReachable: (yield* ListenAddress).remoteReachable,
     instanceKey: serverConfig.stateDir,
     environmentId: yield* serverEnvironment.getEnvironmentId,
     development: serverConfig.devUrl !== undefined,

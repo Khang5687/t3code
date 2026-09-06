@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  deriveAuthClientMetadata,
-  isRemoteReachableHost,
-  resolveSessionCookieName,
-} from "./utils.ts";
+import { deriveAuthClientMetadata, resolveSessionCookieName } from "./utils.ts";
 
 describe("deriveAuthClientMetadata", () => {
   it("labels Electron user agents as Electron instead of Chrome", () => {
@@ -62,7 +58,7 @@ describe("session cookie isolation", () => {
     const first = resolveSessionCookieName({
       mode: "web",
       port: 5775,
-      host: "127.0.0.1",
+      remoteReachable: false,
       instanceKey: "/tmp/t3-agent-one",
       environmentId: "environment-one",
       development: true,
@@ -70,7 +66,7 @@ describe("session cookie isolation", () => {
     const second = resolveSessionCookieName({
       mode: "web",
       port: 5775,
-      host: "127.0.0.1",
+      remoteReachable: false,
       instanceKey: "/tmp/t3-agent-two",
       environmentId: "environment-two",
       development: true,
@@ -85,7 +81,7 @@ describe("session cookie isolation", () => {
     const first = resolveSessionCookieName({
       mode: "web",
       port: 3773,
-      host: "192.168.1.50",
+      remoteReachable: true,
       instanceKey: "/srv/t3-one",
       environmentId: "environment-one",
       development: false,
@@ -93,7 +89,7 @@ describe("session cookie isolation", () => {
     const second = resolveSessionCookieName({
       mode: "web",
       port: 5775,
-      host: "192.168.1.50",
+      remoteReachable: true,
       instanceKey: "/srv/t3-two",
       environmentId: "environment-two",
       development: false,
@@ -108,7 +104,7 @@ describe("session cookie isolation", () => {
     const first = resolveSessionCookieName({
       mode: "web",
       port: 8080,
-      host: "0.0.0.0",
+      remoteReachable: true,
       instanceKey: "/srv/t3",
       environmentId: "environment-one",
       development: false,
@@ -116,7 +112,7 @@ describe("session cookie isolation", () => {
     const second = resolveSessionCookieName({
       mode: "web",
       port: 9090,
-      host: "app.example.com",
+      remoteReachable: true,
       instanceKey: "/srv/t3",
       environmentId: "environment-one",
       development: false,
@@ -130,7 +126,7 @@ describe("session cookie isolation", () => {
       resolveSessionCookieName({
         mode: "desktop",
         port: 3773,
-        host: "127.0.0.1",
+        remoteReachable: false,
         instanceKey: "/tmp/desktop",
         environmentId: "environment-one",
         development: true,
@@ -143,20 +139,11 @@ describe("session cookie isolation", () => {
       resolveSessionCookieName({
         mode: "web",
         port: 5775,
-        host: "0.0.0.0",
+        remoteReachable: true,
         instanceKey: "/tmp/t3-wildcard-dev",
         environmentId: "environment-one",
         development: true,
       }),
     ).toMatch(/^t3_session_5775_[a-f0-9]{12}$/);
-  });
-
-  it("classifies loopback aliases separately from remotely reachable hosts", () => {
-    expect(isRemoteReachableHost(undefined)).toBe(false);
-    expect(isRemoteReachableHost("localhost")).toBe(false);
-    expect(isRemoteReachableHost("127.12.0.1")).toBe(false);
-    expect(isRemoteReachableHost("[::1]")).toBe(false);
-    expect(isRemoteReachableHost("0.0.0.0")).toBe(true);
-    expect(isRemoteReachableHost("192.168.1.50")).toBe(true);
   });
 });

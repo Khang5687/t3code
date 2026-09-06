@@ -1,26 +1,31 @@
 import { assert, expect, it } from "@effect/vitest";
 
+import { resolveListenAddress } from "./listenAddress.ts";
 import {
   buildPairingUrl,
   formatHeadlessServeOutput,
   renderTerminalQrCode,
-  resolveHeadlessConnectionHost,
   resolveHeadlessConnectionString,
   resolveListeningPort,
 } from "./startupAccess.ts";
 
 it("prefers localhost when no explicit host is configured", () => {
-  expect(resolveHeadlessConnectionHost(undefined)).toBe("localhost");
-  expect(resolveHeadlessConnectionString(undefined, 3773)).toBe("http://localhost:3773");
+  expect(resolveHeadlessConnectionString(resolveListenAddress(undefined, {}), 3773)).toBe(
+    "http://localhost:3773",
+  );
 });
 
 it("keeps explicit bind hosts in the connection string", () => {
-  expect(resolveHeadlessConnectionString("127.0.0.1", 3773)).toBe("http://127.0.0.1:3773");
-  expect(resolveHeadlessConnectionString("::1", 3773)).toBe("http://[::1]:3773");
+  expect(resolveHeadlessConnectionString(resolveListenAddress("127.0.0.1", {}), 3773)).toBe(
+    "http://127.0.0.1:3773",
+  );
+  expect(resolveHeadlessConnectionString(resolveListenAddress("::1", {}), 3773)).toBe(
+    "http://[::1]:3773",
+  );
 });
 
 it("resolves wildcard hosts to a concrete external interface when one is available", () => {
-  const connectionString = resolveHeadlessConnectionString("0.0.0.0", 3773, {
+  const listen = resolveListenAddress("0.0.0.0", {
     en0: [
       {
         address: "192.168.1.42",
@@ -43,7 +48,7 @@ it("resolves wildcard hosts to a concrete external interface when one is availab
     ],
   });
 
-  expect(connectionString).toBe("http://192.168.1.42:3773");
+  expect(resolveHeadlessConnectionString(listen, 3773)).toBe("http://192.168.1.42:3773");
 });
 
 it("prefers the actual bound port when an http server address is available", () => {

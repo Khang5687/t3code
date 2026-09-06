@@ -126,6 +126,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import * as ListenAddress from "./listenAddress.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -213,16 +214,17 @@ const RelayClientLive = Layer.unwrap(
   }),
 );
 
-const HttpServerLive = Layer.unwrap(
+export const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const listen = yield* ListenAddress.ListenAddress;
     if (typeof Bun !== "undefined") {
       const BunHttpServer = yield* Effect.promise(
         () => import("@effect/platform-bun/BunHttpServer"),
       );
       return BunHttpServer.layer({
         port: config.port,
-        hostname: config.host ?? "127.0.0.1",
+        hostname: listen.bindHost,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
         websocket: {
           // Negotiate permessage-deflate with clients that offer it; clients
@@ -245,7 +247,7 @@ const HttpServerLive = Layer.unwrap(
         Effect.promise(() => import("node:http")),
       ]);
       return NodeHttpServer.layer(() => guardHttpResponseWriteErrors(NodeHttp.createServer()), {
-        host: config.host ?? "127.0.0.1",
+        host: listen.bindHost,
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
         // Negotiate permessage-deflate with clients that offer it; clients
@@ -594,7 +596,8 @@ export const makeServerLayer = Layer.unwrap(
           }
 
           const state = yield* makePersistedServerRuntimeState({
-            config,
+            listen: yield* ListenAddress.ListenAddress,
+            devUrl: config.devUrl,
             port: address.port,
           });
           yield* persistServerRuntimeState({
@@ -774,5 +777,6 @@ export const makeServerLayer = Layer.unwrap(
   }),
 );
 
-// The CLI supplies configuration.
-export const runServer = Layer.launch(makeServerLayer);
+// The CLI supplies configuration. The listen address resolves once here, from
+// the live interface table; tests hand `makeServerLayer` a pinned one instead.
+export const runServer = Layer.launch(makeServerLayer.pipe(Layer.provide(ListenAddress.layer())));
