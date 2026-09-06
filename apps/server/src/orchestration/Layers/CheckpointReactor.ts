@@ -748,7 +748,6 @@ const make = Effect.gen(function* () {
           });
         }
         if (
-          attempt.turnCount > 0 &&
           !(yield* checkpointStore.hasCheckpointRef({ cwd, checkpointRef: targetCheckpointRef }))
         ) {
           return yield* new CheckpointRevertRecovery.CheckpointRevertRecoveryError({
@@ -804,7 +803,6 @@ const make = Effect.gen(function* () {
         const restored = yield* checkpointStore.restoreCheckpoint({
           cwd: attempt.cwd,
           checkpointRef: attempt.targetCheckpointRef,
-          fallbackToHead: attempt.turnCount === 0,
         });
         if (!restored) {
           return yield* new CheckpointRevertRecovery.CheckpointRevertRecoveryError({
@@ -1054,8 +1052,9 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: CheckpointReactorShape["start"] = Effect.fn("start")(function* () {
+    const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
     yield* forkParked(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+      Stream.runForEach(domainEvents, (event) => {
         if (
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
