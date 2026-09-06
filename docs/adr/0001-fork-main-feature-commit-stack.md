@@ -1,0 +1,5 @@
+# Carry fork-only work as one squashed feature commit per project, rebased onto upstream release tags
+
+This fork tracks a fast-moving upstream (`pingdotgg/t3code`) while carrying a handful of fork-only projects. `fork-main` is always `origin/main` + upstream-bound cherry-picks (`[upstream-bound] …`, directly above `origin/main`, kept only until the upstream PR merges) + one squashed `[fork] …` feature commit per project; fixups are squashed into their feature commit before every rebase. We rebase onto upstream release tags (and on demand), tag the result `vX.Y.Z-fork.N`, and keep the fork's `main` as a pristine mirror. Upstream-bound work is authored on `ub/<slug>` branches off `origin/main` so it stays PR-able.
+
+We chose this over merge-based integration (conflicts resurface across many commits and the history stops being readable against upstream) and over one long-lived branch per project (nothing ever integrates them). Consequences: `fork-main` is force-pushed on every rebase, and CI must be enabled for it explicitly — upstream's `ci.yml` only runs on `main`.
