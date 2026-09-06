@@ -1,6 +1,9 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
   isImportedAgentSessionMessageId,
+  getThreadPendingOperation,
+  pendingOperationAfterEvent,
+  ThreadTurnStartRequestedPayload,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -337,6 +340,7 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
+            pendingOperation: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
@@ -603,6 +607,32 @@ export function projectEvent(
         };
       });
 
+    case "thread.turn-start-requested":
+      return decodeForEvent(
+        ThreadTurnStartRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pendingOperation: pendingOperationAfterEvent(
+                getThreadPendingOperation(thread),
+                event,
+                payload.operation === undefined
+                  ? thread.messages.find((message) => message.id === payload.messageId)
+                  : undefined,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
     case "thread.session-set":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -630,10 +660,16 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            pendingOperation: pendingOperationAfterEvent(getThreadPendingOperation(thread), event),
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {
                     turnId: session.activeTurnId,
+                    requestId:
+                      thread.latestTurn?.turnId === session.activeTurnId
+                        ? (thread.latestTurn.requestId ??
+                          getThreadPendingOperation(thread)?.requestId)
+                        : getThreadPendingOperation(thread)?.requestId,
                     state: "running",
                     requestedAt:
                       thread.latestTurn?.turnId === session.activeTurnId
@@ -756,6 +792,9 @@ export function projectEvent(
               ? thread.latestTurn
               : {
                   turnId: payload.turnId,
+                  ...(thread.latestTurn?.turnId === payload.turnId
+                    ? { requestId: thread.latestTurn.requestId }
+                    : {}),
                   state:
                     thread.latestTurn?.turnId === payload.turnId &&
                     thread.latestTurn.state === "interrupted"
@@ -822,6 +861,7 @@ export function projectEvent(
               proposedPlans,
               activities,
               latestTurn,
+              pendingOperation: null,
               updatedAt: event.occurredAt,
             }),
           };
@@ -852,6 +892,10 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
+              pendingOperation: pendingOperationAfterEvent(
+                getThreadPendingOperation(thread),
+                event,
+              ),
               updatedAt: event.occurredAt,
             }),
           };

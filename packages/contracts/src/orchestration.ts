@@ -459,6 +459,7 @@ export type OrchestrationLatestTurnState = typeof OrchestrationLatestTurnState.T
 
 export const OrchestrationLatestTurn = Schema.Struct({
   turnId: TurnId,
+  requestId: Schema.optional(MessageId),
   state: OrchestrationLatestTurnState,
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
@@ -467,6 +468,21 @@ export const OrchestrationLatestTurn = Schema.Struct({
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
+
+export const OrchestrationOperationKind = Schema.Literals(["turn", "compact"]);
+export type OrchestrationOperationKind = typeof OrchestrationOperationKind.Type;
+
+export const OrchestrationPendingOperation = Schema.Struct({
+  kind: OrchestrationOperationKind,
+  requestId: MessageId,
+});
+export type OrchestrationPendingOperation = typeof OrchestrationPendingOperation.Type;
+
+export const OrchestrationOperationResult = Schema.Struct({
+  requestId: MessageId,
+  outcome: Schema.Literals(["completed", "failed", "interrupted"]),
+});
+export type OrchestrationOperationResult = typeof OrchestrationOperationResult.Type;
 
 export const ThreadTitleRegeneration = Schema.Struct({
   requestId: CommandId,
@@ -495,6 +511,8 @@ export const OrchestrationThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  // Missing means an older server has not projected operation state.
+  pendingOperation: Schema.optional(Schema.NullOr(OrchestrationPendingOperation)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -573,6 +591,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  pendingOperation: Schema.optional(Schema.NullOr(OrchestrationPendingOperation)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -958,6 +977,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
   threadId: ThreadId,
+  operation: Schema.optional(OrchestrationOperationKind),
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
@@ -979,6 +999,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
   threadId: ThreadId,
+  operation: Schema.optional(OrchestrationOperationKind),
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
@@ -1101,6 +1122,7 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  operationResult: Schema.optional(Schema.NullOr(OrchestrationOperationResult)),
   createdAt: IsoDateTime,
 });
 
@@ -1164,6 +1186,7 @@ const ThreadActivityAppendCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
+  operationResult: Schema.optional(Schema.NullOr(OrchestrationOperationResult)),
   createdAt: IsoDateTime,
 });
 
@@ -1399,6 +1422,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  operation: Schema.optional(OrchestrationOperationKind),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -1448,6 +1472,8 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+  // Null is an explicit non-result. Missing is reserved for old events.
+  operationResult: Schema.optional(Schema.NullOr(OrchestrationOperationResult)),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
@@ -1469,6 +1495,7 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
+  operationResult: Schema.optional(Schema.NullOr(OrchestrationOperationResult)),
 });
 
 /**

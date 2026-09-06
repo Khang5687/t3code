@@ -1,6 +1,8 @@
 import {
   ApprovalRequestId,
   isImportedAgentSessionMessageId,
+  isContextCompactionMessage,
+  pendingOperationAfterEvent,
   type ChatAttachment,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
@@ -33,6 +35,7 @@ import {
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
   type ProjectionTurn,
+  type ProjectionPendingTurnStart,
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
@@ -1255,6 +1258,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       });
     });
 
+    const resolvePendingOperation = Effect.fn("resolvePendingOperation")(function* (
+      pending: ProjectionPendingTurnStart,
+    ) {
+      let kind = pending.operation;
+      if (kind == null) {
+        const message = yield* projectionThreadMessageRepository.getByMessageId({
+          messageId: pending.messageId,
+        });
+        kind =
+          Option.isSome(message) && isContextCompactionMessage(message.value) ? "compact" : "turn";
+      }
+      return { kind, requestId: pending.messageId };
+    });
+
     const applyThreadTurnsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadTurnsProjection",
     )(function* (event, _attachmentSideEffects) {
@@ -1266,25 +1283,29 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.turn-start-requested": {
-          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+          const existing = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });
-          if (Option.isSome(pendingTurnStart)) {
-            const pendingMessage = yield* projectionThreadMessageRepository.getByMessageId({
-              messageId: pendingTurnStart.value.messageId,
-            });
-            if (
-              Option.isSome(pendingMessage) &&
-              pendingMessage.value.role === "user" &&
-              (pendingMessage.value.attachments?.length ?? 0) === 0 &&
-              pendingMessage.value.text.trim().toLowerCase() === "/compact"
-            ) {
-              return;
-            }
-          }
+          const pending = Option.isSome(existing)
+            ? yield* resolvePendingOperation(existing.value)
+            : null;
+          if (pending?.kind === "compact") return;
+          const legacyMessage =
+            event.payload.operation === undefined
+              ? yield* projectionThreadMessageRepository.getByMessageId({
+                  messageId: event.payload.messageId,
+                })
+              : Option.none();
+          const next = pendingOperationAfterEvent(
+            pending,
+            event,
+            Option.getOrUndefined(legacyMessage),
+          );
+          if (next === null) return;
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
+            operation: next.kind,
             sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
             sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
             requestedAt: event.payload.createdAt,
@@ -1293,49 +1314,30 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.activity-appended": {
-          if (event.payload.activity.kind === "context-compaction") {
-            const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId(
-              event.payload,
-            );
-            if (
-              Option.isNone(pendingTurnStart) ||
-              String(pendingTurnStart.value.messageId) !==
-                extractActivityRequestId(event.payload.activity.payload)
-            ) {
-              return;
-            }
-            yield* projectionTurnRepository.deletePendingTurnStartByThreadId(event.payload);
-            return;
-          }
-          if (event.payload.activity.kind !== "provider.turn.start.failed") return;
-          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId(
+          if (event.payload.operationResult === null) return;
+          const existing = yield* projectionTurnRepository.getPendingTurnStartByThreadId(
             event.payload,
           );
-          if (
-            Option.isNone(pendingTurnStart) ||
-            String(pendingTurnStart.value.messageId) !==
-              extractActivityRequestId(event.payload.activity.payload)
-          ) {
-            return;
+          if (Option.isNone(existing)) return;
+          const pending = yield* resolvePendingOperation(existing.value);
+          if (pendingOperationAfterEvent(pending, event) === null) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId(event.payload);
           }
-          yield* projectionTurnRepository.deletePendingTurnStartByThreadId(event.payload);
           return;
         }
 
         case "thread.session-set": {
+          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(pendingTurnStart)) {
+            const pending = yield* resolvePendingOperation(pendingTurnStart.value);
+            if (pendingOperationAfterEvent(pending, event) === null) {
+              yield* projectionTurnRepository.deletePendingTurnStartByThreadId(event.payload);
+            }
+          }
           const turnId = event.payload.session.activeTurnId;
           if (turnId === null || event.payload.session.status !== "running") {
-            if (
-              (event.payload.session.status === "ready" &&
-                event.commandId?.startsWith("server:provider-session-set:") === true) ||
-              event.payload.session.status === "error" ||
-              event.payload.session.status === "stopped" ||
-              event.payload.session.status === "interrupted"
-            ) {
-              yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
-                threadId: event.payload.threadId,
-              });
-            }
             // Leaving the "running" session status is the turn-end signal:
             // settle still-running turns so their duration reflects the whole
             // turn rather than the last assistant message.
@@ -1390,9 +1392,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
             turnId,
-          });
-          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-            threadId: event.payload.threadId,
           });
           if (Option.isSome(existingTurn)) {
             const nextState =
@@ -1455,9 +1454,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             });
           }
 
-          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
-            threadId: event.payload.threadId,
-          });
           return;
         }
 
