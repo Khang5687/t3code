@@ -1212,6 +1212,7 @@ const make = Effect.gen(function* () {
       type: "thread.proposed-plan.upsert",
       commandId: CommandId.make(`server:source-plan-accepted:${event.eventId}`),
       threadId: source.threadId,
+      onlyIfUnimplemented: true,
       proposedPlan: {
         ...sourcePlan,
         implementedAt: event.payload.createdAt,

@@ -1162,6 +1162,7 @@ const ThreadProposedPlanUpsertCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   proposedPlan: OrchestrationProposedPlan,
+  onlyIfUnimplemented: Schema.optional(Schema.Literal(true)),
   createdAt: IsoDateTime,
 });
 
