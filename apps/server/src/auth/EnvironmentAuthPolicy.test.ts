@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ListenAddress from "../listenAddress.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 
 const makeEnvironmentAuthPolicyLayer = (
@@ -12,6 +13,7 @@ const makeEnvironmentAuthPolicyLayer = (
 ) =>
   EnvironmentAuthPolicy.layer.pipe(
     Layer.provide(ServerEnvironment.identityLayer),
+    Layer.provide(ListenAddress.layer({ interfaces: {} })),
     Layer.provide(
       Layer.effect(
         ServerConfig.ServerConfig,

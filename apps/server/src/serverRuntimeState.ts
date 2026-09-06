@@ -5,8 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "./atomicWrite.ts";
-import type * as ServerConfig from "./config.ts";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess.ts";
+import type { ResolvedListenAddress } from "./listenAddress.ts";
 
 export const PersistedServerRuntimeState = Schema.Struct({
   version: Schema.Literal(1),
@@ -38,26 +37,19 @@ const decodePersistedServerRuntimeState = Schema.decodeUnknownEffect(
   Schema.fromJsonString(PersistedServerRuntimeState),
 );
 
-const runtimeOriginForConfig = (
-  config: Pick<ServerConfig.ServerConfig["Service"], "host">,
-  port: number,
-): PersistedServerRuntimeState["origin"] => {
-  const hostname =
-    config.host && !isWildcardHost(config.host) ? formatHostForUrl(config.host) : "127.0.0.1";
-  return `http://${hostname}:${port}`;
-};
-
 export const makePersistedServerRuntimeState = (input: {
-  readonly config: Pick<ServerConfig.ServerConfig["Service"], "host" | "devUrl">;
+  readonly listen: Pick<ResolvedListenAddress, "configuredHost" | "urlHost">;
+  readonly devUrl: URL | undefined;
   readonly port: number;
 }): Effect.Effect<PersistedServerRuntimeState> =>
   Effect.map(DateTime.now, (now) => ({
     version: 1,
     pid: process.pid,
-    ...(input.config.host ? { host: input.config.host } : {}),
+    ...(input.listen.configuredHost ? { host: input.listen.configuredHost } : {}),
     port: input.port,
-    origin: runtimeOriginForConfig(input.config, input.port),
-    ...(input.config.devUrl ? { devUrl: input.config.devUrl.toString() } : {}),
+    // Wildcard binds answer on loopback, so local CLIs reach them there.
+    origin: `http://${input.listen.urlHost ?? "127.0.0.1"}:${input.port}`,
+    ...(input.devUrl ? { devUrl: input.devUrl.toString() } : {}),
     startedAt: DateTime.formatIso(now),
   }));
 

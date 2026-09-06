@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 
+import { resolveListenAddress } from "./listenAddress.ts";
 import * as ServerRuntimeState from "./serverRuntimeState.ts";
 
 const isServerRuntimeStateError = Schema.is(ServerRuntimeState.ServerRuntimeStateError);
@@ -46,8 +47,10 @@ describe("serverRuntimeState", () => {
 
   it.effect("records the dev web URL when the server fronts a dev server", () =>
     Effect.gen(function* () {
+      const listen = resolveListenAddress(undefined, {});
       const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
-        config: { host: undefined, devUrl: new URL("http://localhost:5733") },
+        listen,
+        devUrl: new URL("http://localhost:5733"),
         port: 13_773,
       });
 
@@ -55,7 +58,8 @@ describe("serverRuntimeState", () => {
       assert.equal(state.origin, "http://127.0.0.1:13773");
 
       const withoutDev = yield* ServerRuntimeState.makePersistedServerRuntimeState({
-        config: { host: undefined, devUrl: undefined },
+        listen,
+        devUrl: undefined,
         port: 13_773,
       });
       assert.isFalse("devUrl" in withoutDev);
