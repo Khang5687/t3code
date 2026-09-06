@@ -27,9 +27,10 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import * as TurnCheckpointCapture from "../../checkpointing/TurnCheckpointCapture.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterRequestError,
@@ -322,6 +323,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerAuthService = yield* ProviderAuthService;
   const providerService = yield* ProviderService;
+  const checkpointCapture = yield* TurnCheckpointCapture.TurnCheckpointCapture;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -347,6 +349,10 @@ const make = Effect.gen(function* () {
   const threadModelSelections = new Map<string, ModelSelection>();
   const compactingThreadIds = new Set<ThreadId>();
   const stoppingThreadIds = new Set<ThreadId>();
+  const delayedTurnStarts = new Map<
+    ThreadId,
+    Array<Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>>
+  >();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -1183,6 +1189,29 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
+    const waitForCapture = yield* checkpointCapture.pendingCapture(event.payload.threadId);
+    if (waitForCapture !== undefined) {
+      const delayed = delayedTurnStarts.get(event.payload.threadId);
+      if (delayed) {
+        delayed.push(event);
+      } else {
+        const requests = [event];
+        delayedTurnStarts.set(event.payload.threadId, requests);
+        // Keep other threads and stop requests moving while this thread waits.
+        yield* waitForCapture.pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              if (delayedTurnStarts.get(event.payload.threadId) !== requests) return;
+              delayedTurnStarts.delete(event.payload.threadId);
+              yield* Effect.forEach(requests, worker.enqueue, { discard: true });
+            }),
+          ),
+          Effect.forkScoped,
+        );
+      }
+      return;
+    }
+
     const key = turnStartKeyForEvent(event);
     if (yield* hasHandledTurnStartRecently(key)) {
       return;
@@ -1435,9 +1464,7 @@ const make = Effect.gen(function* () {
       Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
     );
 
-    if (Option.isNone(sendTurnRequest)) {
-      return;
-    }
+    if (Option.isNone(sendTurnRequest)) return;
 
     yield* providerService
       .sendTurn(sendTurnRequest.value)
@@ -1702,6 +1729,29 @@ const make = Effect.gen(function* () {
     yield* increment(orchestrationEventsProcessedTotal, {
       eventType: event.type,
     });
+    if (
+      event.type === "thread.turn-interrupt-requested" ||
+      event.type === "thread.session-stop-requested"
+    ) {
+      const delayed = delayedTurnStarts.get(event.payload.threadId);
+      delayedTurnStarts.delete(event.payload.threadId);
+      if (delayed) {
+        yield* Effect.forEach(
+          delayed,
+          (request) =>
+            appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.start.failed",
+              summary: "Queued message cancelled",
+              detail: "This message was cancelled before the previous turn's checkpoint finished.",
+              turnId: null,
+              requestId: request.payload.messageId,
+              createdAt: event.occurredAt,
+            }),
+          { discard: true },
+        );
+      }
+    }
     switch (event.type) {
       case "thread.meta-updated":
         yield* threadTitleRegenerationWorker.enqueue(event);
@@ -1768,7 +1818,8 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processDomainEventSafely);
+  const worker: DrainableWorker<ProviderIntentEvent> =
+    yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
@@ -1836,4 +1887,6 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(TurnCheckpointCapture.layer),
+);
