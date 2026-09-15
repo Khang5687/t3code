@@ -127,6 +127,20 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
   return { _tag: "interfaces", interfaces: normalizeListenInterfaces({ kinds, addresses }) };
 };
 
+/**
+ * The `--host` spelling of a selection, for the desktop's bootstrap envelope:
+ * the client sends what was asked for and the server resolves it. Round-trips
+ * through `parseListenHostSelection`, because a selection always carries
+ * `loopback`, so the value is never a bare legacy token.
+ */
+export const formatListenHostSelection = (selection: ListenInterfaces): string =>
+  [...selection.kinds, ...selection.addresses].join(",");
+
+/** Set equality on kinds and addresses; normalization makes the serialized forms comparable. */
+export const listenInterfacesEqual = (a: ListenInterfaces, b: ListenInterfaces): boolean =>
+  formatListenHostSelection(normalizeListenInterfaces(a)) ===
+  formatListenHostSelection(normalizeListenInterfaces(b));
+
 export const ExposurePreset = Schema.Literals(["local-only", "tailscale-only", "lan", "custom"]);
 export type ExposurePreset = typeof ExposurePreset.Type;
 export type NamedExposurePreset = Exclude<ExposurePreset, "custom">;
