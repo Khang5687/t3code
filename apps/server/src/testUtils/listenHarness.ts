@@ -103,8 +103,11 @@ const tcpProbe = (address: string, port: number): Effect.Effect<TcpProbeOutcome>
   Effect.callback<TcpProbeOutcome>((resume) => {
     const socket = NodeNet.connect({ host: address, port });
     socket.once("connect", () => {
-      socket.destroy();
-      resume(Effect.succeed({ outcome: "accept" }));
+      // Close politely and wait for the socket to finish closing: a `destroy()`
+      // here leaves the server reaping a half-open connection, which races the
+      // scope teardown at the end of the test.
+      socket.once("close", () => resume(Effect.succeed({ outcome: "accept" })));
+      socket.end();
     });
     socket.once("error", (error: NodeJS.ErrnoException) => {
       const code = error.code ?? "UNKNOWN";

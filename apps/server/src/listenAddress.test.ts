@@ -48,7 +48,7 @@ describe("resolveListenAddress", () => {
 
     expect(listen).toEqual({
       kind: "loopback",
-      bindHost: "127.0.0.1",
+      bindHosts: ["127.0.0.1"],
       remoteReachable: false,
       configuredHost: undefined,
       urlHost: undefined,
@@ -75,7 +75,7 @@ describe("resolveListenAddress", () => {
     const listen = resolveListenAddress("::1", noInterfaces);
 
     expect(listen.kind).toBe("loopback");
-    expect(listen.bindHost).toBe("::1");
+    expect(listen.bindHosts).toEqual(["::1"]);
     expect(listen.urlHost).toBe("[::1]");
     expect(listen.connectionHost).toBe("::1");
   });
@@ -84,7 +84,7 @@ describe("resolveListenAddress", () => {
     const listen = resolveListenAddress("0.0.0.0", externalIpv4Interfaces);
 
     expect(listen.kind).toBe("wildcard");
-    expect(listen.bindHost).toBe("0.0.0.0");
+    expect(listen.bindHosts).toEqual(["0.0.0.0"]);
     expect(listen.urlHost).toBeUndefined();
     expect(listen.connectionHost).toBe("192.168.1.42");
   });
@@ -97,7 +97,7 @@ describe("resolveListenAddress", () => {
     const listen = resolveListenAddress("[fd7a:115c::1]", noInterfaces);
 
     expect(listen.kind).toBe("explicit");
-    expect(listen.bindHost).toBe("[fd7a:115c::1]");
+    expect(listen.bindHosts).toEqual(["[fd7a:115c::1]"]);
     expect(listen.remoteReachable).toBe(true);
     expect(listen.urlHost).toBe("[fd7a:115c::1]");
     expect(listen.connectionHost).toBe("fd7a:115c::1");
@@ -105,29 +105,24 @@ describe("resolveListenAddress", () => {
 });
 
 describe("resolveListenAddress with a listen-interface selection", () => {
-  it("binds the tailnet address and advertises it for remote clients", () => {
+  it("binds loopback alongside the tailnet address and advertises the tailnet one", () => {
     const listen = resolveListenAddress("tailnet", tailnetInterfaces);
 
     expect(listen.kind).toBe("explicit");
-    expect(listen.bindHost).toBe("100.101.102.103");
+    expect(listen.bindHosts).toEqual(["127.0.0.1", "100.101.102.103"]);
     expect(listen.remoteReachable).toBe(true);
     expect(listen.configuredHost).toBe("tailnet");
-    expect(listen.urlHost).toBe("100.101.102.103");
+    // Local clients keep dialing loopback; only remote clients need the tailnet address.
+    expect(listen.urlHost).toBe("127.0.0.1");
     expect(listen.connectionHost).toBe("100.101.102.103");
-  });
-
-  it("names the addresses it could not bind while only one listener exists", () => {
-    const listen = resolveListenAddress("tailnet", tailnetInterfaces);
-
-    expect(listen.warnings).toHaveLength(1);
-    expect(listen.warnings[0]).toContain("127.0.0.1");
+    expect(listen.warnings).toEqual([]);
   });
 
   it("falls back to loopback with a warning when the tailnet is absent", () => {
     const listen = resolveListenAddress("tailnet", externalIpv4Interfaces);
 
     expect(listen.kind).toBe("loopback");
-    expect(listen.bindHost).toBe("127.0.0.1");
+    expect(listen.bindHosts).toEqual(["127.0.0.1"]);
     expect(listen.remoteReachable).toBe(false);
     expect(listen.warnings.some((warning) => /tailscale address/i.test(warning))).toBe(true);
     expect(listen.warnings.some((warning) => /loopback only/i.test(warning))).toBe(true);
@@ -137,7 +132,7 @@ describe("resolveListenAddress with a listen-interface selection", () => {
     const listen = resolveListenAddress("loopback", tailnetInterfaces);
 
     expect(listen.kind).toBe("loopback");
-    expect(listen.bindHost).toBe("127.0.0.1");
+    expect(listen.bindHosts).toEqual(["127.0.0.1"]);
     expect(listen.remoteReachable).toBe(false);
     expect(listen.warnings).toEqual([]);
   });
@@ -145,19 +140,36 @@ describe("resolveListenAddress with a listen-interface selection", () => {
   it("skips the tailnet address when only lan was selected", () => {
     const listen = resolveListenAddress("lan", tailnetInterfaces);
 
-    expect(listen.bindHost).toBe("192.168.1.42");
+    expect(listen.bindHosts).toEqual(["127.0.0.1", "192.168.1.42"]);
+    expect(listen.connectionHost).toBe("192.168.1.42");
+    expect(listen.remoteReachable).toBe(true);
+  });
+
+  it("binds every selected kind at once", () => {
+    const listen = resolveListenAddress("tailnet,lan", tailnetInterfaces);
+
+    expect(listen.bindHosts).toEqual(["127.0.0.1", "100.101.102.103", "192.168.1.42"]);
     expect(listen.remoteReachable).toBe(true);
   });
 
   it("binds an explicitly listed address that is present on an interface", () => {
     const listen = resolveListenAddress("loopback,192.168.1.42", tailnetInterfaces);
 
-    expect(listen.bindHost).toBe("192.168.1.42");
+    expect(listen.bindHosts).toEqual(["127.0.0.1", "192.168.1.42"]);
     expect(listen.remoteReachable).toBe(true);
+  });
+
+  it("skips an explicit address that is on no interface and binds the rest", () => {
+    const listen = resolveListenAddress("lan,203.0.113.7", tailnetInterfaces);
+
+    expect(listen.bindHosts).toEqual(["127.0.0.1", "192.168.1.42"]);
+    expect(listen.warnings.some((warning) => warning.includes("203.0.113.7"))).toBe(true);
   });
 
   it("still binds a single legacy host verbatim rather than resolving interfaces", () => {
     expect(resolveListenAddress("0.0.0.0", tailnetInterfaces).kind).toBe("wildcard");
-    expect(resolveListenAddress("192.168.1.42", tailnetInterfaces).bindHost).toBe("192.168.1.42");
+    expect(resolveListenAddress("192.168.1.42", tailnetInterfaces).bindHosts).toEqual([
+      "192.168.1.42",
+    ]);
   });
 });
