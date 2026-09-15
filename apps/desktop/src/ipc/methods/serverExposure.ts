@@ -2,6 +2,8 @@ import {
   AdvertisedEndpoint,
   DesktopServerExposureModeSchema,
   DesktopServerExposureStateSchema,
+  ListenInterfaces,
+  formatListenHostSelection,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -39,6 +41,25 @@ export const setServerExposureMode = DesktopIpc.makeIpcMethod({
     }
     return change.state;
   }),
+});
+
+export const setServerListenInterfaces = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_SERVER_LISTEN_INTERFACES_CHANNEL,
+  payload: ListenInterfaces,
+  result: DesktopServerExposureStateSchema,
+  handler: Effect.fn("desktop.ipc.serverExposure.setListenInterfaces")(
+    function* (listenInterfaces) {
+      const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+      const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+      const change = yield* serverExposure.setListenInterfaces(listenInterfaces);
+      if (change.requiresRelaunch) {
+        yield* lifecycle.relaunch(
+          `listenInterfaces=${formatListenHostSelection(change.state.listenInterfaces)}`,
+        );
+      }
+      return change.state;
+    },
+  ),
 });
 
 export const setTailscaleServeEnabled = DesktopIpc.makeIpcMethod({

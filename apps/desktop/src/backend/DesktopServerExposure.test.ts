@@ -158,8 +158,10 @@ describe("DesktopServerExposure", () => {
         assert.equal(state.endpointUrl, null);
         assert.equal((yield* settings.get).serverExposureMode, "network-accessible");
 
+        // The envelope still asks for the tailnet and LAN; the server resolves
+        // it to loopback and warns, rather than the desktop pre-resolving.
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.bindHost, "127.0.0.1");
+        assert.equal(backendConfig.listenHost, "loopback,tailnet,lan");
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
       }),
     ),
@@ -193,6 +195,11 @@ describe("DesktopServerExposure", () => {
         assert.equal(change.requiresRelaunch, true);
         assert.deepEqual(change.state, {
           mode: "network-accessible",
+          listenInterfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
+          preset: "lan",
+          resolvedAddresses: ["127.0.0.1", "192.168.1.20"],
+          warnings: ["tailnet selected but no Tailscale address was found"],
+          tailscaleServeAvailable: true,
           endpointUrl: "http://192.168.1.20:4173",
           advertisedHost: "192.168.1.20",
           tailscaleServeEnabled: false,
@@ -200,7 +207,7 @@ describe("DesktopServerExposure", () => {
         });
 
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.bindHost, "0.0.0.0");
+        assert.equal(backendConfig.listenHost, "loopback,tailnet,lan");
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
 
         const persisted = yield* settings.get;
@@ -252,6 +259,7 @@ describe("DesktopServerExposure", () => {
       load: Effect.succeed(DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
       setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
       setServerExposureMode: () => Effect.fail(settingsFailure),
+      setListenInterfaces: () => Effect.fail(settingsFailure),
       setTailscaleServe: () => Effect.fail(settingsFailure),
       setUpdateChannel: () => Effect.die("unexpected update channel change"),
       setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
@@ -333,7 +341,7 @@ describe("DesktopServerExposure", () => {
         assert.equal(state.mode, "network-accessible");
         assert.equal(state.advertisedHost, null);
         assert.equal(state.endpointUrl, null);
-        assert.equal((yield* serverExposure.backendConfig).bindHost, "0.0.0.0");
+        assert.equal((yield* serverExposure.backendConfig).listenHost, "loopback,tailnet,lan");
 
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
         assert.deepEqual(
@@ -489,6 +497,106 @@ describe("DesktopServerExposure", () => {
         T3CODE_DESKTOP_HTTPS_ENDPOINTS:
           "https://desktop.example.ts.net,http://desktop.example.test:3773,not-a-url",
       },
+    ),
+  );
+
+  it.effect("requires a relaunch only when the selection changes as a set", () =>
+    withHarness(
+      lanNetworkInterfaces,
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+
+        const widened = yield* serverExposure.setListenInterfaces({
+          kinds: ["loopback", "tailnet", "lan"],
+        });
+        assert.equal(widened.requiresRelaunch, true);
+
+        // Same set, different order and a duplicate: nothing to rebind.
+        const reordered = yield* serverExposure.setListenInterfaces({
+          kinds: ["lan", "tailnet", "lan", "loopback"],
+        });
+        assert.equal(reordered.requiresRelaunch, false);
+
+        const narrowed = yield* serverExposure.setListenInterfaces({ kinds: ["loopback", "lan"] });
+        assert.equal(narrowed.requiresRelaunch, true);
+        assert.equal(narrowed.state.preset, "custom");
+        assert.equal(narrowed.state.mode, "network-accessible");
+      }),
+    ),
+  );
+
+  it.effect("offers Tailscale Serve only while the tailnet is selected", () =>
+    withHarness(
+      tailnetNetworkInterfaces,
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+        yield* serverExposure.setTailscaleServeEnabled({ enabled: true });
+
+        const withTailnet = yield* serverExposure.setListenInterfaces({ kinds: ["tailnet"] });
+        assert.equal(withTailnet.state.tailscaleServeAvailable, true);
+        assert.equal((yield* serverExposure.backendConfig).tailscaleServeEnabled, true);
+
+        // Deselecting the tailnet withdraws Serve without discarding the preference.
+        const loopbackOnly = yield* serverExposure.setListenInterfaces({ kinds: ["loopback"] });
+        assert.equal(loopbackOnly.state.tailscaleServeAvailable, false);
+        assert.equal(loopbackOnly.state.tailscaleServeEnabled, true);
+        assert.equal((yield* serverExposure.backendConfig).tailscaleServeEnabled, false);
+      }),
+      {},
+      dieOnSpawnLayer(),
+    ),
+  );
+
+  it.effect("advertises an endpoint per selected interface and none for the rest", () =>
+    withHarness(
+      { ...tailnetNetworkInterfaces, ...lanNetworkInterfaces },
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+
+        // Default {loopback}: no LAN endpoint, no tailnet endpoint, no spawn.
+        assert.deepEqual(
+          (yield* serverExposure.getAdvertisedEndpoints).map((endpoint) => endpoint.httpBaseUrl),
+          ["http://127.0.0.1:4173/"],
+        );
+
+        yield* serverExposure.setListenInterfaces({ kinds: ["loopback", "lan"] });
+        assert.deepEqual(
+          (yield* serverExposure.getAdvertisedEndpoints).map((endpoint) => endpoint.httpBaseUrl),
+          ["http://127.0.0.1:4173/", "http://192.168.1.20:4173/"],
+        );
+      }),
+      {},
+      dieOnSpawnLayer(),
+    ),
+  );
+
+  it.effect("maps the legacy mode setter onto presets and derives the mode back", () =>
+    withHarness(
+      lanNetworkInterfaces,
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+
+        const enabled = yield* serverExposure.setMode("network-accessible");
+        assert.equal(enabled.state.preset, "lan");
+        assert.deepEqual(enabled.state.listenInterfaces, {
+          kinds: ["loopback", "tailnet", "lan"],
+          addresses: [],
+        });
+        assert.deepEqual((yield* settings.get).listenInterfaces, {
+          kinds: ["loopback", "tailnet", "lan"],
+          addresses: [],
+        });
+
+        const disabled = yield* serverExposure.setMode("local-only");
+        assert.equal(disabled.state.mode, "local-only");
+        assert.equal(disabled.state.preset, "local-only");
+        assert.deepEqual(disabled.state.listenInterfaces, { kinds: ["loopback"], addresses: [] });
+      }),
     ),
   );
 });
