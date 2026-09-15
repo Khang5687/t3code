@@ -158,7 +158,16 @@ export class ListenAddress extends Context.Service<ListenAddress, ResolvedListen
 export const layer = (options?: { readonly interfaces?: NetworkInterfacesMap }) =>
   Layer.effect(
     ListenAddress,
-    Effect.map(ServerConfig, (config) =>
-      resolveListenAddress(config.host, options?.interfaces ?? NodeOS.networkInterfaces()),
-    ),
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      const listen = resolveListenAddress(
+        config.host,
+        options?.interfaces ?? NodeOS.networkInterfaces(),
+      );
+      // Logged here so every surface sees them, not just headless startup output.
+      yield* Effect.forEach(listen.warnings, (warning) => Effect.logWarning(warning), {
+        discard: true,
+      });
+      return listen;
+    }),
   );
