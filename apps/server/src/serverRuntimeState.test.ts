@@ -66,6 +66,32 @@ describe("serverRuntimeState", () => {
     }),
   );
 
+  it.effect("carries the loopback fallback warnings of a tailnet selection", () =>
+    Effect.gen(function* () {
+      const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
+        listen: resolveListenAddress("tailnet", {}),
+        devUrl: undefined,
+        port: 13_773,
+      });
+
+      assert.equal(state.host, "tailnet");
+      assert.equal(state.origin, "http://127.0.0.1:13773");
+      assert.isTrue((state.warnings ?? []).some((warning) => /loopback only/i.test(warning)));
+    }),
+  );
+
+  it.effect("omits warnings entirely when the bind matched the request", () =>
+    Effect.gen(function* () {
+      const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
+        listen: resolveListenAddress(undefined, {}),
+        devUrl: undefined,
+        port: 13_773,
+      });
+
+      assert.isFalse("warnings" in state);
+    }),
+  );
+
   it.effect("treats a missing runtime state file as absent", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

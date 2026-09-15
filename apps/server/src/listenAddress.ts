@@ -1,5 +1,7 @@
 import * as NodeOS from "node:os";
 
+import { type ListenInterfaces, parseListenHostSelection } from "@t3tools/contracts";
+import { LOOPBACK_LISTEN_ADDRESS, resolveListenAddresses } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -27,6 +29,8 @@ export interface ResolvedListenAddress {
   readonly urlHost: string | undefined;
   /** Hostname a client on another machine dials to reach this server; wildcard binds pick an external interface. */
   readonly connectionHost: string;
+  /** Why the bind differs from what was asked for; surfaced in runtime state and startup output. */
+  readonly warnings: ReadonlyArray<string>;
 }
 
 export const isLoopbackHost = (host: string | undefined): boolean => {
@@ -82,10 +86,55 @@ const resolveConnectionHost = (
   return externalIpv6 ? normalizeHost(externalIpv6.address) : "localhost";
 };
 
+/**
+ * Interim single bind. A selection can resolve to several addresses, but one
+ * `HttpServerLive` opens one socket, so the first non-loopback address wins —
+ * that is what makes `--host tailnet` reachable on the tailnet rather than on
+ * loopback. Every address that lost is named in a warning. The multi-bind
+ * ticket replaces this with one listener per resolved address.
+ */
+const resolveFromInterfaces = (
+  host: string | undefined,
+  selection: ListenInterfaces,
+  interfaces: NetworkInterfacesMap,
+): ResolvedListenAddress => {
+  const resolved = resolveListenAddresses(selection, interfaces);
+  const bindHost =
+    resolved.addresses.find((address) => address !== LOOPBACK_LISTEN_ADDRESS) ??
+    LOOPBACK_LISTEN_ADDRESS;
+  const dropped = resolved.addresses.filter((address) => address !== bindHost);
+  const kind: ListenAddressKind = isLoopbackHost(bindHost) ? "loopback" : "explicit";
+
+  return {
+    kind,
+    bindHost,
+    remoteReachable: kind !== "loopback",
+    configuredHost: host,
+    urlHost: formatHostForUrl(bindHost),
+    connectionHost: bindHost,
+    warnings:
+      dropped.length === 0
+        ? resolved.warnings
+        : [
+            ...resolved.warnings,
+            `binding ${bindHost} only; ${dropped.join(", ")} also resolved but binding every selected interface is not implemented yet`,
+          ],
+  };
+};
+
 export const resolveListenAddress = (
   host: string | undefined,
   interfaces: NetworkInterfacesMap = NodeOS.networkInterfaces(),
 ): ResolvedListenAddress => {
+  const parsed = parseListenHostSelection(host);
+  if (parsed._tag === "interfaces") {
+    return resolveFromInterfaces(host, parsed.interfaces, interfaces);
+  }
+
+  // `legacy` and `invalid` both bind the value verbatim. Every CLI path -- flag,
+  // `T3CODE_HOST`, bootstrap envelope -- rejects an unparseable host before it
+  // reaches here, so `invalid` only arrives from a direct call. Binding it and
+  // letting the socket complain beats throwing from a pure resolver.
   const kind: ListenAddressKind = isWildcardHost(host)
     ? "wildcard"
     : isLoopbackHost(host)
@@ -98,6 +147,7 @@ export const resolveListenAddress = (
     configuredHost: host,
     urlHost: host !== undefined && kind !== "wildcard" ? formatHostForUrl(host) : undefined,
     connectionHost: resolveConnectionHost(host, interfaces),
+    warnings: [],
   };
 };
 
@@ -109,7 +159,16 @@ export class ListenAddress extends Context.Service<ListenAddress, ResolvedListen
 export const layer = (options?: { readonly interfaces?: NetworkInterfacesMap }) =>
   Layer.effect(
     ListenAddress,
-    Effect.map(ServerConfig, (config) =>
-      resolveListenAddress(config.host, options?.interfaces ?? NodeOS.networkInterfaces()),
-    ),
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      const listen = resolveListenAddress(
+        config.host,
+        options?.interfaces ?? NodeOS.networkInterfaces(),
+      );
+      // Logged here so every surface sees them, not just headless startup output.
+      yield* Effect.forEach(listen.warnings, (warning) => Effect.logWarning(warning), {
+        discard: true,
+      });
+      return listen;
+    }),
   );

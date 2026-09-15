@@ -37,12 +37,18 @@ On a desktop host, open **Settings → Connections**, enable **Network access**,
 then create a pairing link using an address the other device can reach. Changing
 network access restarts the desktop app. You can turn it off in the same place.
 
-For a command-line host, replace `<private-ip>` with the host's LAN or tailnet
-address:
+For a command-line host, name the interfaces to serve on. `tailnet` picks the
+host's Tailscale address and `lan` its local network address, so you do not have
+to look either up:
 
 ```bash
-npx t3 serve --host <private-ip>
+npx t3 serve --host tailnet
 ```
+
+Combine them with commas, as in `--host tailnet,lan`, or repeat the flag. A
+single address still works: `npx t3 serve --host <private-ip>`. When you ask for
+the tailnet and Tailscale is not running, the server starts on loopback only and
+says so.
 
 If a server is already running, generate a fresh link without restarting it:
 

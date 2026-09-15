@@ -10,6 +10,8 @@ export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
   readonly token: string;
   readonly pairingUrl: string;
+  /** Why the bind differs from the requested exposure; printed above the ready line. */
+  readonly warnings: ReadonlyArray<string>;
 }
 
 export const resolveHeadlessConnectionString = (
@@ -61,6 +63,7 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
+    ...accessInfo.warnings.map((warning) => `Warning: ${warning}`),
     "T3 Code server is ready.",
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
@@ -85,5 +88,6 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
     connectionString,
     token: issued.credential,
     pairingUrl: buildPairingUrl(connectionString, issued.credential),
+    warnings: listen.warnings,
   } satisfies HeadlessServeAccessInfo;
 });

@@ -18,7 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import { resolveServerConfig } from "./config.ts";
+import { parseHostFlagValues, resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -630,4 +630,116 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       });
     }),
   );
+
+  const resolveHost = (host: Option.Option<string>, env: Record<string, string> = {}) =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-host-base");
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host,
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      );
+      return resolved.host;
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env })), NetService.layer),
+      ),
+    );
+
+  it.effect("carries listen-interface kinds through --host", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveHost(Option.some("tailnet"))).toBe("tailnet");
+      expect(yield* resolveHost(Option.some("tailnet,lan"))).toBe("tailnet,lan");
+      expect(yield* resolveHost(Option.some("loopback,10.0.0.5"))).toBe("loopback,10.0.0.5");
+    }),
+  );
+
+  it.effect("leaves legacy --host values untouched", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveHost(Option.some("0.0.0.0"))).toBe("0.0.0.0");
+      expect(yield* resolveHost(Option.some("127.0.0.1"))).toBe("127.0.0.1");
+    }),
+  );
+
+  it.effect("accepts the same forms from T3CODE_HOST, with the flag still winning", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveHost(Option.none(), { T3CODE_HOST: "tailnet" })).toBe("tailnet");
+      expect(yield* resolveHost(Option.some("lan"), { T3CODE_HOST: "tailnet" })).toBe("lan");
+    }),
+  );
+
+  it.effect("fails fast on an unknown T3CODE_HOST token and lists the accepted forms", () =>
+    Effect.gen(function* () {
+      const error = yield* resolveHost(Option.none(), { T3CODE_HOST: "wifi" }).pipe(Effect.flip);
+
+      expect(error.message).toContain("wifi");
+      for (const form of ["loopback", "tailnet", "lan", "IPv4"]) {
+        expect(error.message).toContain(form);
+      }
+    }),
+  );
+
+  it.effect("accepts interface kinds from the desktop bootstrap envelope", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-host-bootstrap");
+      const fd = yield* openBootstrapFd(makeDesktopBootstrap({ host: "tailnet", t3Home: baseDir }));
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.none(),
+          port: Option.none(),
+          host: Option.none(),
+          baseDir: Option.none(),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.some(fd),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.host).toBe("tailnet");
+    }),
+  );
+
+  // The flag joins repeated values before parsing, so this is where
+  // `--host tailnet --host lan` is proven to union.
+  it("unions repeated --host flags and rejects an unknown one", () => {
+    expect(parseHostFlagValues(["tailnet", "lan"])).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
+    });
+    expect(parseHostFlagValues(["tailnet", "tailnet"])).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet"], addresses: [] },
+    });
+    expect(parseHostFlagValues([])).toEqual({ _tag: "legacy", host: undefined });
+    expect(parseHostFlagValues(["0.0.0.0"])).toEqual({ _tag: "legacy", host: "0.0.0.0" });
+    expect(parseHostFlagValues(["tailnet", "wifi"])._tag).toBe("invalid");
+  });
 });

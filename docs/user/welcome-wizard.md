@@ -12,8 +12,9 @@ hosted app for the first time. Existing workspaces skip this flow.
   `npx t3 serve` so the computer stays available.
 - **Pair a server** connects directly to a server on your network or tailnet.
   Start the server with `npx t3 serve`, then run `npx t3 pair --tailscale` and
-  paste the pairing link. You can also run `npx t3 serve --host <address>` and
-  use `npx t3 pair` when the server is already reachable on your network.
+  paste the pairing link. You can also run `npx t3 serve --host tailnet` (or
+  `--host <address>`) and use `npx t3 pair` when the server is already reachable
+  on your network.
 
 If T3 Code cannot confirm the workspace during startup, the setup flow shows
 **Still connecting** instead of opening the app. Select **Reload** to try again.
