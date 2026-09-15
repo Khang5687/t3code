@@ -81,6 +81,41 @@ describe("serverRuntimeState", () => {
     }),
   );
 
+  it.effect("records every address a multi-interface selection bound", () =>
+    Effect.gen(function* () {
+      const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
+        listen: resolveListenAddress("lan", {
+          lo0: [
+            {
+              address: "127.0.0.1",
+              netmask: "255.0.0.0",
+              family: "IPv4",
+              mac: "00:00:00:00:00:00",
+              internal: true,
+              cidr: "127.0.0.1/8",
+            },
+          ],
+          en0: [
+            {
+              address: "192.168.1.42",
+              netmask: "255.255.255.0",
+              family: "IPv4",
+              mac: "00:00:00:00:00:00",
+              internal: false,
+              cidr: "192.168.1.42/24",
+            },
+          ],
+        }),
+        devUrl: undefined,
+        port: 13_773,
+      });
+
+      assert.deepEqual(state.addresses, ["127.0.0.1", "192.168.1.42"]);
+      // Local CLIs keep dialing loopback even though the LAN address is bound.
+      assert.equal(state.origin, "http://127.0.0.1:13773");
+    }),
+  );
+
   it.effect("omits warnings entirely when the bind matched the request", () =>
     Effect.gen(function* () {
       const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({

@@ -6,7 +6,25 @@ import * as Effect from "effect/Effect";
 import * as NodeOS from "node:os";
 
 import type { NetworkInterfacesMap } from "./listenAddress.ts";
+import * as NodeNet from "node:net";
+
 import { startListenHarness } from "./testUtils/listenHarness.ts";
+
+/**
+ * Whether this process can take `address:port` for itself. After the harness
+ * scope closes every listener must be released, and binding is a deterministic
+ * way to prove that: a connect to a closed port on a LAN address is silently
+ * dropped rather than refused, so it would only ever hang.
+ */
+const canBind = (address: string, port: number): Effect.Effect<boolean> =>
+  Effect.callback<boolean>((resume) => {
+    const server = NodeNet.createServer();
+    server.once("error", () => resume(Effect.succeed(false)));
+    server.listen({ host: address, port }, () => {
+      server.close(() => resume(Effect.succeed(true)));
+    });
+    return Effect.sync(() => server.close());
+  });
 
 const ipv4 = (address: string, internal: boolean) => ({
   address,
@@ -130,7 +148,7 @@ describe("listen harness (Seam 1)", () => {
 describe.skipIf(runnerLan === undefined)(
   "listen harness multi-bind over the runner's LAN address (skipped: no non-internal IPv4 here)",
   () => {
-    it.live("--host lan binds loopback and the LAN address, both accepting", () =>
+    it.live("--host lan binds loopback and the LAN address, both serving HTTP", () =>
       Effect.gen(function* () {
         const harness = yield* startListenHarness({
           host: "lan",
@@ -142,8 +160,44 @@ describe.skipIf(runnerLan === undefined)(
 
         expect(yield* harness.probe("127.0.0.1")).toEqual({ outcome: "accept" });
         expect(yield* harness.probe(runnerLan!)).toEqual({ outcome: "accept" });
-        expect(yield* harness.readAuthPolicy).toBe("remote-reachable");
+        // Reading the real route over each address is what separates a true
+        // per-address bind from one listener that merely accepts on both.
+        expect(yield* harness.readAuthPolicyAt("127.0.0.1")).toBe("remote-reachable");
+        expect(yield* harness.readAuthPolicyAt(runnerLan!)).toBe("remote-reachable");
       }).pipe(Effect.scoped),
+    );
+
+    it.live("skips an explicit address on no interface while the rest still serve", () =>
+      Effect.gen(function* () {
+        const harness = yield* startListenHarness({
+          host: "lan,203.0.113.7",
+          interfaces: withRunnerAddress(runnerLan!),
+        });
+
+        expect(harness.listen.bindHosts).toEqual(["127.0.0.1", runnerLan]);
+        expect(harness.listen.warnings.some((warning) => warning.includes("203.0.113.7"))).toBe(
+          true,
+        );
+        expect(yield* harness.readAuthPolicyAt(runnerLan!)).toBe("remote-reachable");
+      }).pipe(Effect.scoped),
+    );
+
+    it.live("closes every listener when the scope closes", () =>
+      Effect.gen(function* () {
+        const port = yield* Effect.gen(function* () {
+          const harness = yield* startListenHarness({
+            host: "lan",
+            interfaces: withRunnerAddress(runnerLan!),
+          });
+          expect(yield* harness.probe("127.0.0.1")).toEqual({ outcome: "accept" });
+          expect(yield* harness.probe(runnerLan!)).toEqual({ outcome: "accept" });
+          return harness.port;
+        }).pipe(Effect.scoped);
+
+        // Shutdown has to take every listener down, not just the primary.
+        expect(yield* canBind("127.0.0.1", port)).toBe(true);
+        expect(yield* canBind(runnerLan!, port)).toBe(true);
+      }),
     );
   },
 );
@@ -163,7 +217,10 @@ describe.skipIf(runnerTailnet === undefined)(
 
         expect(yield* harness.probe("127.0.0.1")).toEqual({ outcome: "accept" });
         expect(yield* harness.probe(runnerTailnet!)).toEqual({ outcome: "accept" });
-        expect(yield* harness.readAuthPolicy).toBe("remote-reachable");
+        // The pinned comment on #6 requires loopback to serve alongside the
+        // tailnet address, not merely to be listed.
+        expect(yield* harness.readAuthPolicyAt("127.0.0.1")).toBe("remote-reachable");
+        expect(yield* harness.readAuthPolicyAt(runnerTailnet!)).toBe("remote-reachable");
       }).pipe(Effect.scoped),
     );
   },
