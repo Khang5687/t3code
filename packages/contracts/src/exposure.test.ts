@@ -160,4 +160,18 @@ describe("parseListenHostSelection", () => {
     expect(parseListenHostSelection("app.example.com")._tag).toBe("invalid");
     expect(parseListenHostSelection("10.0.0.256")._tag).toBe("invalid");
   });
+
+  it("rejects a colon-bearing token that is not an IPv6 address", () => {
+    // These used to pass as "contains a colon, must be IPv6" and only failed
+    // later at bind time, with a DNS error instead of the accepted forms.
+    for (const token of ["foo:bar", "host:3773", "tailnet:lan"]) {
+      expect(parseListenHostSelection(token)._tag).toBe("invalid");
+    }
+  });
+
+  it("still accepts every IPv6 form the old --host took", () => {
+    for (const host of ["::", "::1", "[::1]", "fd7a:115c::1", "[fd7a:115c::1]", "fe80::1%en0"]) {
+      expect(parseListenHostSelection(host)).toEqual({ _tag: "legacy", host });
+    }
+  });
 });

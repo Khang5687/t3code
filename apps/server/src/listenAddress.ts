@@ -131,9 +131,10 @@ export const resolveListenAddress = (
     return resolveFromInterfaces(host, parsed.interfaces, interfaces);
   }
 
-  // `legacy` and `invalid` both bind the value verbatim. The CLI rejects an
-  // unparseable `--host` up front, so reaching here with one means an older
-  // desktop bootstrap envelope, which should still start the server.
+  // `legacy` and `invalid` both bind the value verbatim. Every CLI path -- flag,
+  // `T3CODE_HOST`, bootstrap envelope -- rejects an unparseable host before it
+  // reaches here, so `invalid` only arrives from a direct call. Binding it and
+  // letting the socket complain beats throwing from a pure resolver.
   const kind: ListenAddressKind = isWildcardHost(host)
     ? "wildcard"
     : isLoopbackHost(host)

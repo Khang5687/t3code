@@ -1,6 +1,11 @@
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, parseListenHostSelection, PortSchema } from "@t3tools/contracts";
+import {
+  DesktopBackendBootstrap,
+  LISTEN_HOST_ACCEPTED_FORMS,
+  parseListenHostSelection,
+  PortSchema,
+} from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -26,6 +31,10 @@ const portFlag = Flag.integer("port").pipe(
   Flag.withDescription("Port for the HTTP/WebSocket server."),
   Flag.optional,
 );
+/** Exported so a test can prove repeated `--host` flags union without booting a server. */
+export const parseHostFlagValues = (values: ReadonlyArray<string>) =>
+  parseListenHostSelection(values.join(",").trim());
+
 // `--host` may repeat. Repeated values join with commas and union in the
 // parser (ADR 0003), so `--host tailnet --host lan` and `--host tailnet,lan`
 // mean the same thing. The inner Option is the flag's own "not provided"
@@ -37,12 +46,16 @@ const hostFlag = Flag.string("host").pipe(
   Flag.atLeast(0),
   Flag.filterMap(
     (values) =>
-      parseListenHostSelection(values.join(",").trim())._tag === "invalid"
+      parseHostFlagValues(values)._tag === "invalid"
         ? Option.none()
         : Option.some(values.length === 0 ? Option.none<string>() : Option.some(values.join(","))),
     (values) => {
-      const parsed = parseListenHostSelection(values.join(",").trim());
-      return parsed._tag === "invalid" ? parsed.message : `Invalid --host value.`;
+      const parsed = parseHostFlagValues(values);
+      // Only reached once the predicate rejected, so the parse is invalid; the
+      // fallback exists to narrow the union, not to describe a real outcome.
+      return parsed._tag === "invalid"
+        ? parsed.message
+        : `Unknown --host value. Expected ${LISTEN_HOST_ACCEPTED_FORMS}`;
     },
   ),
 );

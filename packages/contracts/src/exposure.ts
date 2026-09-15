@@ -64,11 +64,14 @@ const isIpv4Address = (token: string): boolean => IPV4_PATTERN.test(token);
 const isListenInterfaceKind = (token: string): token is ListenInterfaceKind =>
   (LISTEN_INTERFACE_KIND_ORDER as ReadonlyArray<string>).includes(token);
 
+// Every IPv6 form the old `--host` took, bracketed or not, including `::` and
+// a zone id. Deliberately not "contains a colon": that let `foo:bar` through to
+// the socket, which failed at bind with a DNS error instead of failing fast.
+const IPV6_PATTERN = /^\[?[0-9a-f:]*:[0-9a-f:.]*(?:%[0-9a-z_.-]+)?\]?$/i;
+
 /** A single token the old `--host` accepted, which still binds verbatim. */
 const isLegacyHostToken = (token: string): boolean =>
-  isIpv4Address(token) ||
-  token.includes(":") || // every IPv6 form, bracketed or not, including `::`
-  token === "localhost";
+  isIpv4Address(token) || IPV6_PATTERN.test(token) || token === "localhost";
 
 export const LISTEN_HOST_ACCEPTED_FORMS =
   "an interface kind (loopback, tailnet, lan), an IPv4 address, or a single host to bind verbatim (for example 127.0.0.1, 0.0.0.0, ::1, or localhost). Combine kinds and addresses with commas, or repeat --host.";

@@ -18,7 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import { resolveServerConfig } from "./config.ts";
+import { parseHostFlagValues, resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -691,4 +691,55 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       }
     }),
   );
+
+  it.effect("accepts interface kinds from the desktop bootstrap envelope", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-host-bootstrap");
+      const fd = yield* openBootstrapFd(makeDesktopBootstrap({ host: "tailnet", t3Home: baseDir }));
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.none(),
+          port: Option.none(),
+          host: Option.none(),
+          baseDir: Option.none(),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.some(fd),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.host).toBe("tailnet");
+    }),
+  );
+
+  // The flag joins repeated values before parsing, so this is where
+  // `--host tailnet --host lan` is proven to union.
+  it("unions repeated --host flags and rejects an unknown one", () => {
+    expect(parseHostFlagValues(["tailnet", "lan"])).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
+    });
+    expect(parseHostFlagValues(["tailnet", "tailnet"])).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet"], addresses: [] },
+    });
+    expect(parseHostFlagValues([])).toEqual({ _tag: "legacy", host: undefined });
+    expect(parseHostFlagValues(["0.0.0.0"])).toEqual({ _tag: "legacy", host: "0.0.0.0" });
+    expect(parseHostFlagValues(["tailnet", "wifi"])._tag).toBe("invalid");
+  });
 });
