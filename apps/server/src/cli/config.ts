@@ -1,6 +1,6 @@
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import { DesktopBackendBootstrap, parseListenHostSelection, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -26,9 +26,25 @@ const portFlag = Flag.integer("port").pipe(
   Flag.withDescription("Port for the HTTP/WebSocket server."),
   Flag.optional,
 );
+// `--host` may repeat. Repeated values join with commas and union in the
+// parser (ADR 0003), so `--host tailnet --host lan` and `--host tailnet,lan`
+// mean the same thing. The inner Option is the flag's own "not provided"
+// state; `filterMap`'s Option is the validation channel.
 const hostFlag = Flag.string("host").pipe(
-  Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
-  Flag.optional,
+  Flag.withDescription(
+    "Interfaces to bind: loopback, tailnet, lan, and/or IPv4 addresses, comma-separated or repeated. A single host (127.0.0.1, 0.0.0.0, ::1) binds verbatim.",
+  ),
+  Flag.atLeast(0),
+  Flag.filterMap(
+    (values) =>
+      parseListenHostSelection(values.join(",").trim())._tag === "invalid"
+        ? Option.none()
+        : Option.some(values.length === 0 ? Option.none<string>() : Option.some(values.join(","))),
+    (values) => {
+      const parsed = parseListenHostSelection(values.join(",").trim());
+      return parsed._tag === "invalid" ? parsed.message : `Invalid --host value.`;
+    },
+  ),
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
@@ -140,6 +156,19 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
 });
+
+/** A `T3CODE_HOST` or bootstrap-envelope host the listen-interface parser rejected. */
+export class InvalidListenHostError extends Schema.TaggedErrorClass<InvalidListenHostError>()(
+  "InvalidListenHostError",
+  {
+    host: Schema.String,
+    reason: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
 
 export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
@@ -345,6 +374,15 @@ export const resolveServerConfig = (
       ),
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
+    // `--host` is validated by its flag; `T3CODE_HOST` and the bootstrap
+    // envelope reach here unchecked, so the same parser gates them too.
+    const hostSelection = parseListenHostSelection(host);
+    if (hostSelection._tag === "invalid") {
+      return yield* new InvalidListenHostError({
+        host: host ?? "",
+        reason: hostSelection.message,
+      });
+    }
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
     const config: ServerConfig.ServerConfig["Service"] = {
