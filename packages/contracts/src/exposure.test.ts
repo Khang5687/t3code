@@ -8,6 +8,7 @@ import {
   listenInterfacesForLegacyExposureMode,
   listenInterfacesForPreset,
   normalizeListenInterfaces,
+  parseListenHostSelection,
 } from "./exposure.ts";
 
 const decode = Schema.decodeUnknownSync(ListenInterfaces);
@@ -87,5 +88,76 @@ describe("legacy exposure mode mapping", () => {
       "network-accessible",
     );
     expect(legacyExposureModeOf(decode({ kinds: ["tailnet"] }))).toBe("network-accessible");
+  });
+});
+
+describe("parseListenHostSelection", () => {
+  it("reads an unset or blank host as the legacy default", () => {
+    for (const raw of [undefined, "", "  ", ","]) {
+      expect(parseListenHostSelection(raw)).toEqual({ _tag: "legacy", host: undefined });
+    }
+  });
+
+  it("keeps a single legacy host binding verbatim", () => {
+    for (const host of [
+      "127.0.0.1",
+      "0.0.0.0",
+      "192.168.1.42",
+      "::",
+      "::1",
+      "[::1]",
+      "localhost",
+    ]) {
+      expect(parseListenHostSelection(host)).toEqual({ _tag: "legacy", host });
+    }
+  });
+
+  it("reads a lone kind keyword as a selection, always including loopback", () => {
+    expect(parseListenHostSelection("tailnet")).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet"], addresses: [] },
+    });
+    expect(parseListenHostSelection("loopback")).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback"], addresses: [] },
+    });
+  });
+
+  it("unions comma-separated kinds and IPv4 addresses in bind order", () => {
+    expect(parseListenHostSelection("lan, tailnet ,10.0.0.5")).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: ["10.0.0.5"] },
+    });
+  });
+
+  it("treats several addresses as a selection even without a kind keyword", () => {
+    expect(parseListenHostSelection("10.0.0.5,192.168.1.42")).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback"], addresses: ["10.0.0.5", "192.168.1.42"] },
+    });
+  });
+
+  it("dedupes repeated tokens so joined --host flags union", () => {
+    expect(parseListenHostSelection("tailnet,tailnet,10.0.0.5,10.0.0.5")).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback", "tailnet"], addresses: ["10.0.0.5"] },
+    });
+  });
+
+  it("rejects an unknown token and lists the accepted forms", () => {
+    const parsed = parseListenHostSelection("tailnet,wifi");
+
+    expect(parsed._tag).toBe("invalid");
+    if (parsed._tag !== "invalid") return;
+    expect(parsed.token).toBe("wifi");
+    expect(parsed.message).toContain("wifi");
+    for (const form of ["loopback", "tailnet", "lan", "IPv4", "--host"]) {
+      expect(parsed.message).toContain(form);
+    }
+  });
+
+  it("rejects a lone token that is neither a kind nor a legacy host", () => {
+    expect(parseListenHostSelection("app.example.com")._tag).toBe("invalid");
+    expect(parseListenHostSelection("10.0.0.256")._tag).toBe("invalid");
   });
 });
