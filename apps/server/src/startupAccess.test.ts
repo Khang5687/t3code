@@ -75,9 +75,11 @@ it("formats headless serve output with the connection string, token, pairing url
     connectionString: "http://192.168.1.42:3773",
     token: "PAIRCODE",
     pairingUrl: "http://192.168.1.42:3773/pair#token=PAIRCODE",
+    boundAddresses: ["127.0.0.1", "192.168.1.42"],
     warnings: [],
   });
 
+  expect(output).toContain("Listening on: 127.0.0.1, 192.168.1.42");
   expect(output).toContain("Connection string: http://192.168.1.42:3773");
   expect(output).toContain("Token: PAIRCODE");
   expect(output).toContain("Pairing URL: http://192.168.1.42:3773/pair#token=PAIRCODE");
@@ -89,6 +91,7 @@ it("prints resolver warnings above the ready line so a loopback fallback is visi
     connectionString: "http://127.0.0.1:3773",
     token: "PAIRCODE",
     pairingUrl: "http://127.0.0.1:3773/pair#token=PAIRCODE",
+    boundAddresses: ["127.0.0.1"],
     warnings: ["tailnet selected but no Tailscale address was found", "listening on loopback only"],
   });
 

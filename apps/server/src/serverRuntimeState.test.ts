@@ -76,6 +76,7 @@ describe("serverRuntimeState", () => {
 
       assert.equal(state.host, "tailnet");
       assert.equal(state.origin, "http://127.0.0.1:13773");
+      assert.deepEqual(state.addresses, ["127.0.0.1"]);
       assert.isTrue((state.warnings ?? []).some((warning) => /loopback only/i.test(warning)));
     }),
   );
