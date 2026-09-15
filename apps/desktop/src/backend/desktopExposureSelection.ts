@@ -53,6 +53,8 @@ export interface DesktopExposureResolution {
   /** Hosts the desktop-core endpoints advertise, in bind order. */
   readonly advertisedHosts: ReadonlyArray<string>;
   readonly tailnetSelected: boolean;
+  /** The tailnet was selected *and* an address for it resolved. */
+  readonly tailnetResolved: boolean;
   /** The request needed more than loopback and got nothing else. */
   readonly unavailable: boolean;
 }
@@ -70,6 +72,11 @@ export const resolveDesktopExposure = (input: {
   const requested = normalizeListenInterfaces(input.requested);
   const resolved = resolveListenAddresses(requested, toResolverInterfaces(input.networkInterfaces));
   const tailnetSelected = requested.kinds.includes("tailnet");
+  // Serve and the tailnet endpoints need a real tailnet address, not just the
+  // kind. The `lan` preset carries `tailnet`, so gating on the kind alone would
+  // spawn the Tailscale CLI on every LAN machine without Tailscale installed,
+  // raising the macOS "Other apps" TCC prompt for nothing.
+  const tailnetResolved = tailnetSelected && resolved.addresses.some(isTailscaleIpv4Address);
 
   // Asked for more than loopback and got nothing else: report local-only while
   // leaving the request in settings, so the preference survives the interface
@@ -102,6 +109,7 @@ export const resolveDesktopExposure = (input: {
     warnings: resolved.warnings,
     advertisedHosts,
     tailnetSelected,
+    tailnetResolved,
     unavailable,
   };
 };

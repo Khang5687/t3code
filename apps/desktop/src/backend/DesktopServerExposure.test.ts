@@ -199,7 +199,7 @@ describe("DesktopServerExposure", () => {
           preset: "lan",
           resolvedAddresses: ["127.0.0.1", "192.168.1.20"],
           warnings: ["tailnet selected but no Tailscale address was found"],
-          tailscaleServeAvailable: true,
+          tailscaleServeAvailable: false,
           endpointUrl: "http://192.168.1.20:4173",
           advertisedHost: "192.168.1.20",
           tailscaleServeEnabled: false,
@@ -563,6 +563,27 @@ describe("DesktopServerExposure", () => {
         );
 
         yield* serverExposure.setListenInterfaces({ kinds: ["loopback", "lan"] });
+        assert.deepEqual(
+          (yield* serverExposure.getAdvertisedEndpoints).map((endpoint) => endpoint.httpBaseUrl),
+          ["http://127.0.0.1:4173/", "http://192.168.1.20:4173/"],
+        );
+      }),
+      {},
+      dieOnSpawnLayer(),
+    ),
+  );
+
+  it.effect("does not spawn the tailscale CLI for a lan preset without a tailnet", () =>
+    withHarness(
+      lanNetworkInterfaces,
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+        // The `lan` preset carries `tailnet`, but this machine has none, so the
+        // CLI must stay unspawned: dieOnSpawnLayer fails the test otherwise.
+        const change = yield* serverExposure.setMode("network-accessible");
+        assert.equal(change.state.tailscaleServeAvailable, false);
+
         assert.deepEqual(
           (yield* serverExposure.getAdvertisedEndpoints).map((endpoint) => endpoint.httpBaseUrl),
           ["http://127.0.0.1:4173/", "http://192.168.1.20:4173/"],

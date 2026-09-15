@@ -275,7 +275,7 @@ const toContractState = (state: RuntimeState): DesktopServerExposureState => {
     preset: state.resolution.preset,
     resolvedAddresses: state.resolution.resolvedAddresses,
     warnings: state.resolution.warnings,
-    tailscaleServeAvailable: state.resolution.tailnetSelected,
+    tailscaleServeAvailable: state.resolution.tailnetResolved,
     endpointUrl: advertisedHost ? `http://${advertisedHost}:${state.port}` : null,
     advertisedHost,
     tailscaleServeEnabled: state.tailscaleServeEnabled,
@@ -287,8 +287,8 @@ const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfi
   port: state.port,
   listenHost: state.resolution.listenHost,
   httpBaseUrl: state.httpBaseUrl,
-  // Serve has nothing to serve unless the tailnet is part of the selection.
-  tailscaleServeEnabled: state.tailscaleServeEnabled && state.resolution.tailnetSelected,
+  // Serve has nothing to serve unless a tailnet address actually resolved.
+  tailscaleServeEnabled: state.tailscaleServeEnabled && state.resolution.tailnetResolved,
   tailscaleServePort: state.tailscaleServePort,
 });
 
@@ -428,10 +428,10 @@ export const make = Effect.gen(function* () {
       customHttpsEndpointUrls: config.desktopHttpsEndpointUrls,
     });
 
-    // Tailnet endpoints and Tailscale Serve exist only when the selection names
-    // `tailnet`. Skipping the spawn also avoids the macOS "Other apps" TCC
+    // Tailnet endpoints and Tailscale Serve exist only once a tailnet address
+    // has resolved. Skipping the spawn also avoids the macOS "Other apps" TCC
     // prompt that Mac App Store Tailscale builds raise on every invocation.
-    if (!state.resolution.tailnetSelected) {
+    if (!state.resolution.tailnetResolved) {
       return coreEndpoints;
     }
 

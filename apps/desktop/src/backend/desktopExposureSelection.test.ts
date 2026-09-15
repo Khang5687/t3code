@@ -37,6 +37,16 @@ describe("resolveDesktopExposure", () => {
     expect(resolution.resolvedAddresses).toEqual(["127.0.0.1", "100.90.1.2", "192.168.1.20"]);
     expect(resolution.advertisedHosts).toEqual(["192.168.1.20"]);
     expect(resolution.tailnetSelected).toBe(true);
+    expect(resolution.tailnetResolved).toBe(true);
+  });
+
+  it("reports the tailnet unresolved when the kind is selected but absent", () => {
+    const resolution = resolveDesktopExposure({
+      requested: listenInterfacesForPreset("lan"),
+      networkInterfaces: lanOnly,
+    });
+    expect(resolution.tailnetSelected).toBe(true);
+    expect(resolution.tailnetResolved).toBe(false);
   });
 
   it("advertises an explicit address the selection names, even a tailnet one", () => {
