@@ -233,10 +233,10 @@ const multiBindHttpServer = <E>(
   Effect.gen(function* () {
     const servers: Array<HttpServer.HttpServer["Service"]> = [];
     for (const host of bindHosts) {
-      const first = servers[0];
-      servers.push(
-        yield* makeServer(host, first ? (first.address as HttpServer.TcpAddress).port : port),
-      );
+      // Only a TCP bind carries a port for the rest to reuse; a Unix socket
+      // leaves them on the configured one.
+      const first = servers[0]?.address;
+      servers.push(yield* makeServer(host, first?._tag === "TcpAddress" ? first.port : port));
     }
 
     const [primary, ...rest] = servers;
@@ -253,6 +253,7 @@ const multiBindHttpServer = <E>(
       // channel, and fanning it out over the listeners cannot narrow that.
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off
       serve: (httpEffect, middleware) =>
+        // The same `unknown` error channel, restated for the fan-out call.
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         Effect.forEach(servers, (server) => server.serve(httpEffect, middleware!), {
           discard: true,
