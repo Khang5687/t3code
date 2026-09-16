@@ -4,6 +4,7 @@ import {
 } from "@t3tools/shared/advertisedEndpoint";
 import {
   DesktopServerExposureModeSchema,
+  listenInterfacesEqual,
   listenInterfacesForLegacyExposureMode,
   type AdvertisedEndpoint,
   type AdvertisedEndpointProvider,
@@ -295,7 +296,8 @@ const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfi
 /** Exposure is bind-time state: the selection only takes effect on a fresh backend. */
 const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): boolean =>
   previous.port !== next.port ||
-  previous.resolution.listenSelection !== next.resolution.listenSelection ||
+  // Set inequality on kinds or addresses, not a difference in spelling.
+  !listenInterfacesEqual(previous.resolution.requested, next.resolution.requested) ||
   previous.localHttpUrl !== next.localHttpUrl;
 
 export const make = Effect.gen(function* () {

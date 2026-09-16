@@ -136,6 +136,20 @@ describe("listenInterfacesEqual", () => {
       ),
     ).toBe(false);
   });
+
+  it("ignores address order, which the serialized form does not", () => {
+    const one = normalizeListenInterfaces({
+      kinds: ["loopback"],
+      addresses: ["10.0.0.5", "192.168.1.2"],
+    });
+    const other = normalizeListenInterfaces({
+      kinds: ["loopback"],
+      addresses: ["192.168.1.2", "10.0.0.5"],
+    });
+
+    expect(formatListenInterfaces(one)).not.toBe(formatListenInterfaces(other));
+    expect(listenInterfacesEqual(one, other)).toBe(true);
+  });
 });
 
 describe("parseListenHostSelection", () => {

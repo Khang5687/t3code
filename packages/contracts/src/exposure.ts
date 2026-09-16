@@ -136,10 +136,25 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
 export const formatListenInterfaces = (selection: ListenInterfaces): string =>
   [...selection.kinds, ...selection.addresses].join(",");
 
-/** Set equality on kinds and addresses; normalization makes the serialized forms comparable. */
-export const listenInterfacesEqual = (a: ListenInterfaces, b: ListenInterfaces): boolean =>
-  formatListenInterfaces(normalizeListenInterfaces(a)) ===
-  formatListenInterfaces(normalizeListenInterfaces(b));
+const sameMembers = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => {
+  if (a.length !== b.length) {
+    return false;
+  }
+  const members = new Set<string>(a);
+  return b.every((value) => members.has(value));
+};
+
+/**
+ * Set equality on kinds and addresses. Deliberately not a comparison of the
+ * serialized form: equality is a property of the selection, not of its `--host`
+ * spelling, and normalization fixes the order of kinds but not of addresses.
+ * Both sides are deduped first, so equal length plus containment is set equality.
+ */
+export const listenInterfacesEqual = (a: ListenInterfaces, b: ListenInterfaces): boolean => {
+  const left = normalizeListenInterfaces(a);
+  const right = normalizeListenInterfaces(b);
+  return sameMembers(left.kinds, right.kinds) && sameMembers(left.addresses, right.addresses);
+};
 
 export const ExposurePreset = Schema.Literals(["local-only", "tailscale-only", "lan", "custom"]);
 export type ExposurePreset = typeof ExposurePreset.Type;
