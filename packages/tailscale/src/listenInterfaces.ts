@@ -17,7 +17,11 @@ export type NetworkInterfaceMap = Readonly<
 >;
 
 export interface ResolvedListenAddresses {
-  readonly addresses: ReadonlyArray<string>;
+  /**
+   * Every address to bind, loopback first. Non-empty by construction, so no
+   * caller needs a fallback of its own.
+   */
+  readonly addresses: readonly [string, ...Array<string>];
   readonly warnings: ReadonlyArray<string>;
   /**
    * The selection asked for more than loopback and nothing else resolved. The
@@ -49,33 +53,36 @@ export function resolveListenAddresses(
   const lan = external.filter((address) => !isTailscaleIpv4Address(address));
   const present = new Set([LOOPBACK_LISTEN_ADDRESS, ...ipv4.map((entry) => entry.address)]);
 
-  const addresses = new Set<string>([LOOPBACK_LISTEN_ADDRESS]);
+  // Loopback is prepended rather than seeded, so the set holds exactly the
+  // addresses beyond loopback and answers the loopback-only question directly.
+  const beyondLoopback = new Set<string>();
   const warnings: Array<string> = [];
 
   if (selection.kinds.includes("tailnet")) {
     if (tailnet.length === 0) {
       warnings.push("tailnet selected but no Tailscale address was found");
     }
-    for (const address of tailnet) addresses.add(address);
+    for (const address of tailnet) beyondLoopback.add(address);
   }
   if (selection.kinds.includes("lan")) {
-    for (const address of lan) addresses.add(address);
+    for (const address of lan) beyondLoopback.add(address);
   }
   for (const address of selection.addresses) {
     if (present.has(address)) {
-      addresses.add(address);
+      beyondLoopback.add(address);
     } else {
       warnings.push(`address ${address} is not on any network interface; skipped`);
     }
   }
 
+  beyondLoopback.delete(LOOPBACK_LISTEN_ADDRESS);
   const requestedMoreThanLoopback =
     selection.kinds.some((kind) => kind !== "loopback") ||
     selection.addresses.some((address) => address !== LOOPBACK_LISTEN_ADDRESS);
-  const loopbackOnly = requestedMoreThanLoopback && addresses.size === 1;
+  const loopbackOnly = requestedMoreThanLoopback && beyondLoopback.size === 0;
   if (loopbackOnly) {
     warnings.push("listening on loopback only");
   }
 
-  return { addresses: [...addresses], warnings, loopbackOnly };
+  return { addresses: [LOOPBACK_LISTEN_ADDRESS, ...beyondLoopback], warnings, loopbackOnly };
 }
