@@ -39,6 +39,3 @@ export const EXPOSURE_PRESET_OPTIONS: ReadonlyArray<{
     description: "Listen on the interfaces and addresses you pick.",
   },
 ];
-
-export const exposurePresetLabel = (preset: ExposurePreset): string =>
-  EXPOSURE_PRESET_OPTIONS.find((option) => option.preset === preset)?.label ?? preset;

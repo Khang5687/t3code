@@ -27,20 +27,23 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { SettingsRow } from "./settingsLayout";
-import {
-  EXPOSURE_PRESET_OPTIONS,
-  exposurePresetLabel,
-  widensExposure,
-} from "./ExposureSettings.logic";
+import { EXPOSURE_PRESET_OPTIONS, widensExposure } from "./ExposureSettings.logic";
 
-const CUSTOM_KINDS: ReadonlyArray<{
-  readonly kind: ListenInterfaceKind;
-  readonly label: string;
-}> = [
-  { kind: "loopback", label: "Loopback" },
-  { kind: "tailnet", label: "Tailnet" },
-  { kind: "lan", label: "Local network" },
-];
+const LISTEN_INTERFACE_LABELS: Record<ListenInterfaceKind, string> = {
+  loopback: "Loopback",
+  tailnet: "Tailnet",
+  lan: "Local network",
+};
+
+const LISTEN_INTERFACE_KINDS = Object.keys(
+  LISTEN_INTERFACE_LABELS,
+) as ReadonlyArray<ListenInterfaceKind>;
+
+/** What a selection opens, in the words the checkboxes use. */
+const describeSelection = (selection: ListenInterfaces): string =>
+  [...selection.kinds.map((kind) => LISTEN_INTERFACE_LABELS[kind]), ...selection.addresses].join(
+    ", ",
+  );
 
 /**
  * Fork-only (ADR 0003). The Connections exposure control: a preset picker over
@@ -173,6 +176,7 @@ export function ExposureSettingsRow({
   );
 
   const shownError = mutationError ?? error;
+  const presetOption = EXPOSURE_PRESET_OPTIONS.find((option) => option.preset === preset);
 
   return (
     <>
@@ -183,8 +187,7 @@ export function ExposureSettingsRow({
             "Loading…"
           ) : (
             <>
-              {EXPOSURE_PRESET_OPTIONS.find((option) => option.preset === preset)?.description}{" "}
-              {endpointSummary}
+              {presetOption?.description} {endpointSummary}
             </>
           )
         }
@@ -222,7 +225,7 @@ export function ExposureSettingsRow({
               aria-label="Exposure preset"
               disabled={state === null || isApplying}
             >
-              <SelectValue>{exposurePresetLabel(preset)}</SelectValue>
+              <SelectValue>{presetOption?.label}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
               {EXPOSURE_PRESET_OPTIONS.map((option) => (
@@ -237,7 +240,7 @@ export function ExposureSettingsRow({
         {preset === "custom" && selection ? (
           <div className="space-y-3 pt-1 pb-3">
             <div className="flex flex-wrap gap-x-5 gap-y-2">
-              {CUSTOM_KINDS.map(({ kind, label }) => (
+              {LISTEN_INTERFACE_KINDS.map((kind) => (
                 <div className="flex items-center gap-2" key={kind}>
                   <Checkbox
                     checked={selection.kinds.includes(kind)}
@@ -247,7 +250,7 @@ export function ExposureSettingsRow({
                     onCheckedChange={(checked) => handleKindToggle(kind, checked)}
                   />
                   <label className="text-[13px]" htmlFor={`${kindIdPrefix}-${kind}`}>
-                    {label}
+                    {LISTEN_INTERFACE_LABELS[kind]}
                   </label>
                 </div>
               ))}
@@ -323,12 +326,7 @@ export function ExposureSettingsRow({
             <AlertDialogTitle>Widen exposure?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingSelection
-                ? `T3 Code restarts to listen on ${[
-                    ...pendingSelection.kinds,
-                    ...pendingSelection.addresses,
-                  ].join(
-                    ", ",
-                  )}. Other devices that can reach those interfaces will be able to pair.`
+                ? `T3 Code restarts to listen on ${describeSelection(pendingSelection)}. Other devices that can reach those interfaces will be able to pair.`
                 : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
