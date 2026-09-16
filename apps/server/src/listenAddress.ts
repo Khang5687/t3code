@@ -100,16 +100,17 @@ const resolveFromInterfaces = (
   interfaces: NetworkInterfacesMap,
 ): ResolvedListenAddress => {
   const resolved = resolveListenAddresses(selection, interfaces);
-  const bindHosts =
-    resolved.addresses.length === 0 ? [LOOPBACK_LISTEN_ADDRESS] : resolved.addresses;
-  const remote = bindHosts.find((address) => !isLoopbackHost(address));
+  // The resolver seeds loopback and applies the loopback-only fallback itself
+  // (ADR 0003), so its list is final and never empty; all that is left here is
+  // picking the address remote clients dial.
+  const remote = resolved.addresses.find((address) => !isLoopbackHost(address));
 
   return {
     kind: remote === undefined ? "loopback" : "explicit",
-    bindHosts,
+    bindHosts: resolved.addresses,
     remoteReachable: remote !== undefined,
     configuredHost: host,
-    urlHost: formatHostForUrl(bindHosts[0] ?? LOOPBACK_LISTEN_ADDRESS),
+    urlHost: formatHostForUrl(resolved.addresses[0]),
     connectionHost: remote ?? LOOPBACK_LISTEN_ADDRESS,
     warnings: resolved.warnings,
   };
