@@ -26,6 +26,7 @@ describe("resolveListenAddresses", () => {
     expect(resolveListenAddresses(select(["loopback"]), interfaces)).toEqual({
       addresses: ["127.0.0.1"],
       warnings: [],
+      loopbackOnly: false,
     });
   });
 
@@ -33,6 +34,7 @@ describe("resolveListenAddresses", () => {
     expect(resolveListenAddresses(select(["loopback", "tailnet"]), interfaces)).toEqual({
       addresses: ["127.0.0.1", "100.101.102.103"],
       warnings: [],
+      loopbackOnly: false,
     });
   });
 
@@ -40,6 +42,7 @@ describe("resolveListenAddresses", () => {
     expect(resolveListenAddresses(select(["loopback", "lan"]), interfaces)).toEqual({
       addresses: ["127.0.0.1", "192.168.1.20", "10.0.0.7"],
       warnings: [],
+      loopbackOnly: false,
     });
   });
 
@@ -52,6 +55,7 @@ describe("resolveListenAddresses", () => {
     ).toEqual({
       addresses: ["127.0.0.1", "100.101.102.103", "192.168.1.20", "10.0.0.7"],
       warnings: [],
+      loopbackOnly: false,
     });
   });
 
@@ -61,6 +65,7 @@ describe("resolveListenAddresses", () => {
     ).toEqual({
       addresses: ["127.0.0.1", "100.101.102.103", "192.168.1.20"],
       warnings: [],
+      loopbackOnly: false,
     });
   });
 
@@ -89,6 +94,7 @@ describe("resolveListenAddresses", () => {
     expect(resolveListenAddresses(select(["loopback"], ["127.0.0.1"]), {})).toEqual({
       addresses: ["127.0.0.1"],
       warnings: [],
+      loopbackOnly: false,
     });
   });
 
@@ -99,6 +105,7 @@ describe("resolveListenAddresses", () => {
     expect(result.addresses).toEqual(["127.0.0.1"]);
     expect(result.warnings).toHaveLength(3);
     expect(result.warnings.at(-1)).toMatch(/loopback only/i);
+    expect(result.loopbackOnly).toBe(true);
   });
 
   it("reads the numeric IPv4 family some Node builds report", () => {
@@ -107,10 +114,12 @@ describe("resolveListenAddresses", () => {
         lo0: [{ address: "127.0.0.1", family: 4, internal: true }],
         en0: [{ address: "192.168.1.20", family: 4, internal: false }],
       }),
-    ).toEqual({ addresses: ["127.0.0.1", "192.168.1.20"], warnings: [] });
+    ).toEqual({ addresses: ["127.0.0.1", "192.168.1.20"], warnings: [], loopbackOnly: false });
   });
 
   it("does not add a loopback-only warning when only loopback was requested", () => {
-    expect(resolveListenAddresses(select(["loopback"]), {}).warnings).toEqual([]);
+    const result = resolveListenAddresses(select(["loopback"]), {});
+    expect(result.warnings).toEqual([]);
+    expect(result.loopbackOnly).toBe(false);
   });
 });

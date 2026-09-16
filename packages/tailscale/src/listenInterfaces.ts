@@ -19,6 +19,11 @@ export type NetworkInterfaceMap = Readonly<
 export interface ResolvedListenAddresses {
   readonly addresses: ReadonlyArray<string>;
   readonly warnings: ReadonlyArray<string>;
+  /**
+   * The selection asked for more than loopback and nothing else resolved. The
+   * verdict lives here so callers read it rather than deriving it again.
+   */
+  readonly loopbackOnly: boolean;
 }
 
 export const LOOPBACK_LISTEN_ADDRESS = "127.0.0.1";
@@ -67,9 +72,10 @@ export function resolveListenAddresses(
   const requestedMoreThanLoopback =
     selection.kinds.some((kind) => kind !== "loopback") ||
     selection.addresses.some((address) => address !== LOOPBACK_LISTEN_ADDRESS);
-  if (requestedMoreThanLoopback && addresses.size === 1) {
+  const loopbackOnly = requestedMoreThanLoopback && addresses.size === 1;
+  if (loopbackOnly) {
     warnings.push("listening on loopback only");
   }
 
-  return { addresses: [...addresses], warnings };
+  return { addresses: [...addresses], warnings, loopbackOnly };
 }

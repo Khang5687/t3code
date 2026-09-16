@@ -60,13 +60,10 @@ export const resolveDesktopExposure = (input: {
   // raising the macOS "Other apps" TCC prompt for nothing.
   const tailnetResolved = tailnetSelected && resolved.addresses.some(isTailscaleIpv4Address);
 
-  // Asked for more than loopback and got nothing else: report local-only while
-  // leaving the request in settings, so the preference survives the interface
-  // coming back. The backend would bind loopback either way.
-  const askedForMoreThanLoopback = requested.kinds.length > 1 || requested.addresses.length > 0;
-  const unavailable =
-    askedForMoreThanLoopback &&
-    resolved.addresses.every((address) => address === LOOPBACK_LISTEN_ADDRESS);
+  // The resolver owns the fallback policy, so read its verdict rather than
+  // taking a second reading here. Report local-only while leaving the request
+  // in settings, so the preference survives the interface coming back.
+  const unavailable = resolved.loopbackOnly;
   const effective = unavailable ? listenInterfacesForPreset("local-only") : requested;
 
   const override = normalizeOptionalHost(input.advertisedHostOverride);
