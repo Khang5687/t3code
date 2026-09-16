@@ -1,5 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { listenInterfacesForPreset, type NamedExposurePreset } from "@t3tools/contracts";
+import {
+  listenInterfacesForPreset,
+  normalizeListenInterfaces,
+  type ListenInterfaces,
+} from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -35,12 +39,12 @@ const isDesktopBackendObservabilitySettingsReadError = Schema.is(
   DesktopBackendConfiguration.DesktopBackendObservabilitySettingsReadError,
 );
 
-const makeServerExposureLayer = (preset: NamedExposurePreset) =>
+const makeServerExposureLayer = (listenInterfaces: ListenInterfaces) =>
   Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
     getState: Effect.die("unexpected getState"),
     backendConfig: Effect.succeed({
       port: 4888,
-      listenInterfaces: listenInterfacesForPreset(preset),
+      listenInterfaces,
       httpBaseUrl: new URL("http://127.0.0.1:4888"),
       tailscaleServeEnabled: true,
       tailscaleServePort: 8443,
@@ -52,7 +56,7 @@ const makeServerExposureLayer = (preset: NamedExposurePreset) =>
     getAdvertisedEndpoints: Effect.succeed([]),
   } satisfies DesktopServerExposure.DesktopServerExposure["Service"]);
 
-const serverExposureLayer = makeServerExposureLayer("lan");
+const serverExposureLayer = makeServerExposureLayer(listenInterfacesForPreset("lan"));
 
 function makeEnvironmentLayer(
   baseDir: string,
@@ -329,9 +333,36 @@ describe("DesktopBackendConfiguration", () => {
       // narrower reaches the backend through WSL2 localhost forwarding, so the
       // probe is wasted work and its address would be a dead endpoint.
       const cases = [
-        { preset: "local-only", host: "loopback", renderer: "127.0.0.1", probes: 0 },
-        { preset: "tailscale-only", host: "loopback,tailnet", renderer: "127.0.0.1", probes: 0 },
-        { preset: "lan", host: "loopback,tailnet,lan", renderer: "172.27.0.99", probes: 1 },
+        {
+          interfaces: listenInterfacesForPreset("local-only"),
+          host: "loopback",
+          renderer: "127.0.0.1",
+          probes: 0,
+        },
+        {
+          interfaces: listenInterfacesForPreset("tailscale-only"),
+          host: "loopback,tailnet",
+          renderer: "127.0.0.1",
+          probes: 0,
+        },
+        {
+          interfaces: listenInterfacesForPreset("lan"),
+          host: "loopback,tailnet,lan",
+          renderer: "172.27.0.99",
+          probes: 1,
+        },
+        // A custom selection names Windows-side addresses. They travel into the
+        // envelope unchanged, but they do not exist inside the distro, so the
+        // NIC stays unadvertised.
+        {
+          interfaces: normalizeListenInterfaces({
+            kinds: ["loopback"],
+            addresses: ["192.168.1.20"],
+          }),
+          host: "loopback,192.168.1.20",
+          renderer: "127.0.0.1",
+          probes: 0,
+        },
       ] as const;
 
       for (const testCase of cases) {
@@ -342,7 +373,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(makeServerExposureLayer(testCase.preset)),
+              Layer.provideMerge(makeServerExposureLayer(testCase.interfaces)),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslServerTree.layerTest()),
               Layer.provideMerge(
