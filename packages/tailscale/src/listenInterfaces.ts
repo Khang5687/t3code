@@ -5,9 +5,13 @@ import { isTailscaleIpv4Address } from "./tailscale.ts";
 /** Structurally matches `os.networkInterfaces()` so callers can pass it straight through. */
 export interface NetworkInterfaceAddress {
   readonly address: string;
-  readonly family: string;
+  /** Node reports "IPv4" on most builds and the numeric 4 on some; both arrive here. */
+  readonly family: string | number;
   readonly internal: boolean;
 }
+
+const isIpv4Family = (family: string | number): boolean =>
+  family === "IPv4" || family === 4 || family === "4";
 export type NetworkInterfaceMap = Readonly<
   Record<string, ReadonlyArray<NetworkInterfaceAddress> | undefined>
 >;
@@ -31,7 +35,10 @@ export function resolveListenAddresses(
 ): ResolvedListenAddresses {
   const ipv4 = Object.values(interfaces)
     .flat()
-    .filter((entry): entry is NetworkInterfaceAddress => entry?.family === "IPv4");
+    .filter(
+      (entry): entry is NetworkInterfaceAddress =>
+        entry !== undefined && isIpv4Family(entry.family),
+    );
   const external = ipv4.filter((entry) => !entry.internal).map((entry) => entry.address);
   const tailnet = external.filter(isTailscaleIpv4Address);
   const lan = external.filter((address) => !isTailscaleIpv4Address(address));

@@ -101,6 +101,15 @@ describe("resolveListenAddresses", () => {
     expect(result.warnings.at(-1)).toMatch(/loopback only/i);
   });
 
+  it("reads the numeric IPv4 family some Node builds report", () => {
+    expect(
+      resolveListenAddresses(select(["loopback", "lan"]), {
+        lo0: [{ address: "127.0.0.1", family: 4, internal: true }],
+        en0: [{ address: "192.168.1.20", family: 4, internal: false }],
+      }),
+    ).toEqual({ addresses: ["127.0.0.1", "192.168.1.20"], warnings: [] });
+  });
+
   it("does not add a loopback-only warning when only loopback was requested", () => {
     expect(resolveListenAddresses(select(["loopback"]), {}).warnings).toEqual([]);
   });

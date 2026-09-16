@@ -13,27 +13,9 @@ import {
   isTailscaleIpv4Address,
   resolveListenAddresses,
   LOOPBACK_LISTEN_ADDRESS,
-  type NetworkInterfaceMap,
 } from "@t3tools/tailscale";
 
 import type { NetworkInterfaces } from "./DesktopNetworkInterfaces.ts";
-
-/**
- * `os.networkInterfaces()` reports IPv4 `family` as the string "IPv4" on the
- * Node build Electron ships, but some builds report the numeric 4. The shared
- * resolver matches the string, so normalize before handing interfaces over.
- */
-const toResolverInterfaces = (interfaces: NetworkInterfaces): NetworkInterfaceMap =>
-  Object.fromEntries(
-    Object.entries(interfaces).map(([name, entries]) => [
-      name,
-      entries?.map((entry) => ({
-        address: entry.address,
-        family: String(entry.family) === "4" ? "IPv4" : String(entry.family),
-        internal: entry.internal,
-      })),
-    ]),
-  );
 
 const normalizeOptionalHost = (value: string | undefined): string | undefined => {
   const normalized = value?.trim();
@@ -70,7 +52,7 @@ export const resolveDesktopExposure = (input: {
   readonly advertisedHostOverride?: string;
 }): DesktopExposureResolution => {
   const requested = normalizeListenInterfaces(input.requested);
-  const resolved = resolveListenAddresses(requested, toResolverInterfaces(input.networkInterfaces));
+  const resolved = resolveListenAddresses(requested, input.networkInterfaces);
   const tailnetSelected = requested.kinds.includes("tailnet");
   // Serve and the tailnet endpoints need a real tailnet address, not just the
   // kind. The `lan` preset carries `tailnet`, so gating on the kind alone would
