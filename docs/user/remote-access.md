@@ -33,9 +33,12 @@ disconnect an otherwise healthy conversation.
 
 Use direct pairing when the other device can reach the host's network address.
 
-On a desktop host, open **Settings → Connections**, enable **Network access**,
-then create a pairing link using an address the other device can reach. Changing
-network access restarts the desktop app. You can turn it off in the same place.
+On a desktop host, open **Settings → Connections** and set **Exposure** to the
+preset you want: **Tailscale only** for your tailnet, **LAN** for the local
+network as well, or **Custom** to pick interfaces and type in addresses. Then
+create a pairing link using an address the other device can reach. Applying a
+preset restarts the desktop app, and widening one asks first. **Local only**
+takes it all back.
 
 For a command-line host, name the interfaces to serve on. `tailnet` picks the
 host's Tailscale address and `lan` its local network address, so you do not have

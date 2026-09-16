@@ -59,7 +59,7 @@ export const ListenInterfaces = Schema.Struct({
 
 // Deliberately a plain predicate, not `Schema.is`: a schema type guard narrows
 // the token to `never` on its false branch, which the checks below still read.
-const isIpv4Address = (token: string): boolean => IPV4_PATTERN.test(token);
+export const isIpv4Address = (token: string): boolean => IPV4_PATTERN.test(token);
 
 const isListenInterfaceKind = (token: string): token is ListenInterfaceKind =>
   (LISTEN_INTERFACE_KIND_ORDER as ReadonlyArray<string>).includes(token);
