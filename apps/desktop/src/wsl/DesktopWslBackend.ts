@@ -16,9 +16,10 @@
 //
 // Port allocation: each WSL instance gets a freshly scanned port to
 // avoid colliding with the primary or with a previously-registered WSL
-// instance that's still tearing down. The scan only checks loopback
-// (127.0.0.1) since the WSL backend is loopback-only — the primary
-// owns LAN exposure when the user opts in.
+// instance that's still tearing down. The scan only checks Windows-side
+// loopback (127.0.0.1), because that is the address WSL2 forwards into
+// the distro; what the Linux backend binds inside WSL is its own
+// namespace and cannot collide with a Windows listener.
 
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -74,9 +75,9 @@ const isWslInstanceId = (id: DesktopBackendPool.BackendInstanceId): boolean =>
 const buildLabel = (distro: string | null): string =>
   distro === null ? "WSL (default distro)" : `WSL (${distro})`;
 
-// Loopback-only port scan starting one above the primary's port. The
-// WSL backend is reachable via 127.0.0.1 from Windows (wslhost
-// auto-forwards), so we only need to verify the IPv4 loopback can bind.
+// Port scan starting one above the primary's port, against Windows-side
+// loopback: that is the address wslhost auto-forwards into the distro, so a
+// free one there is a port the renderer can reach.
 const scanForWslPort = Effect.fn("desktop.wslBackend.scanForWslPort")(function* (
   startPort: number,
 ): Effect.fn.Return<number, NetService.NetError, NetService.NetService> {
