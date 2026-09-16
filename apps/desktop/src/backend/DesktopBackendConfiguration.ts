@@ -539,17 +539,15 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
 
-  // The envelope carries the user's selection, not an address: the Linux
-  // backend resolves it against WSL's own interfaces, exactly as the native
-  // backend does against Windows'. A wildcard here would make "Limited to this
-  // machine" untrue for anyone running Tailscale inside the distro.
+  // The envelope carries the selection, not an address: the Linux backend
+  // resolves it against WSL's own interfaces, exactly as the native backend
+  // does against Windows'. ADR 0003 records what a selection means inside a
+  // distro, and what a loopback-only one costs.
   //
-  // The distro's virtual NIC is an ordinary external interface inside WSL, so
-  // only a selection carrying `lan` binds it. Anything narrower leaves the
-  // renderer on WSL2 localhost forwarding (wslhost: Windows 127.0.0.1 -> WSL
-  // 127.0.0.1), and the distro-IP probe is skipped because nothing would
-  // listen there. Explicit addresses are Windows-side and mean nothing to the
-  // distro, so they do not count as a reason to advertise the NIC.
+  // Only a selection carrying `lan` binds the distro's virtual NIC. Anything
+  // narrower reaches the backend through WSL2 localhost forwarding (wslhost:
+  // Windows 127.0.0.1 -> WSL 127.0.0.1), so the distro-IP probe is skipped:
+  // nothing would be listening at that address.
   const bindsDistroNic = input.listenInterfaces.kinds.includes("lan");
 
   const bootstrap = {
