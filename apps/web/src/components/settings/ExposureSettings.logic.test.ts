@@ -39,6 +39,15 @@ describe("widensExposure", () => {
     );
   });
 
+  it("does not confirm an explicit loopback address", () => {
+    expect(widensExposure(selection(["loopback"]), selection(["loopback"], ["127.0.0.1"]))).toBe(
+      false,
+    );
+    expect(widensExposure(selection(["loopback"]), selection(["loopback"], ["127.1.2.3"]))).toBe(
+      false,
+    );
+  });
+
   it("treats an unchanged selection as no widening", () => {
     expect(widensExposure(listenInterfacesForPreset("lan"), listenInterfacesForPreset("lan"))).toBe(
       false,

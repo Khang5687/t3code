@@ -90,6 +90,7 @@ export function ExposureSettingsRow({
       setMutationError(null);
       try {
         await setListenInterfaces(next);
+        setAddressDraft("");
         onApplied();
       } catch (cause) {
         setMutationError(cause instanceof Error ? cause.message : "Failed to update exposure.");
@@ -153,7 +154,6 @@ export function ExposureSettingsRow({
       return;
     }
     setAddressError(null);
-    setAddressDraft("");
     request(
       normalizeListenInterfaces({
         kinds: selection.kinds,
