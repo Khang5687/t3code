@@ -1,4 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  listenInterfacesForPreset,
+  normalizeListenInterfaces,
+  type ListenInterfaces,
+} from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -34,21 +39,24 @@ const isDesktopBackendObservabilitySettingsReadError = Schema.is(
   DesktopBackendConfiguration.DesktopBackendObservabilitySettingsReadError,
 );
 
-const serverExposureLayer = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
-  getState: Effect.die("unexpected getState"),
-  backendConfig: Effect.succeed({
-    port: 4888,
-    listenSelection: "loopback,tailnet,lan",
-    httpBaseUrl: new URL("http://127.0.0.1:4888"),
-    tailscaleServeEnabled: true,
-    tailscaleServePort: 8443,
-  }),
-  configureFromSettings: () => Effect.die("unexpected configureFromSettings"),
-  setListenInterfaces: () => Effect.die("unexpected setListenInterfaces"),
-  setMode: () => Effect.die("unexpected setMode"),
-  setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
-  getAdvertisedEndpoints: Effect.succeed([]),
-} satisfies DesktopServerExposure.DesktopServerExposure["Service"]);
+const makeServerExposureLayer = (listenInterfaces: ListenInterfaces) =>
+  Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
+    getState: Effect.die("unexpected getState"),
+    backendConfig: Effect.succeed({
+      port: 4888,
+      listenInterfaces,
+      httpBaseUrl: new URL("http://127.0.0.1:4888"),
+      tailscaleServeEnabled: true,
+      tailscaleServePort: 8443,
+    }),
+    configureFromSettings: () => Effect.die("unexpected configureFromSettings"),
+    setListenInterfaces: () => Effect.die("unexpected setListenInterfaces"),
+    setMode: () => Effect.die("unexpected setMode"),
+    setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
+    getAdvertisedEndpoints: Effect.succeed([]),
+  } satisfies DesktopServerExposure.DesktopServerExposure["Service"]);
+
+const serverExposureLayer = makeServerExposureLayer(listenInterfacesForPreset("lan"));
 
 function makeEnvironmentLayer(
   baseDir: string,
@@ -308,6 +316,86 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
       }),
     ),
+  );
+
+  it.effect("resolveWsl hands WSL the selection and advertises only what WSL binds", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+      const entryPath = path.join(baseDir, "apps/server/dist/bin.mjs");
+      yield* fileSystem.makeDirectory(path.dirname(entryPath), { recursive: true });
+      yield* fileSystem.writeFileString(entryPath, "");
+
+      // The distro NIC is only bound by a selection carrying `lan`; everything
+      // narrower reaches the backend through WSL2 localhost forwarding, so the
+      // probe is wasted work and its address would be a dead endpoint.
+      const cases = [
+        {
+          interfaces: listenInterfacesForPreset("local-only"),
+          host: "loopback",
+          renderer: "127.0.0.1",
+          probes: 0,
+        },
+        {
+          interfaces: listenInterfacesForPreset("tailscale-only"),
+          host: "loopback,tailnet",
+          renderer: "127.0.0.1",
+          probes: 0,
+        },
+        {
+          interfaces: listenInterfacesForPreset("lan"),
+          host: "loopback,tailnet,lan",
+          renderer: "172.27.0.99",
+          probes: 1,
+        },
+        // A custom selection names Windows-side addresses. They travel into the
+        // envelope unchanged, but they do not exist inside the distro, so the
+        // NIC stays unadvertised.
+        {
+          interfaces: normalizeListenInterfaces({
+            kinds: ["loopback"],
+            addresses: ["192.168.1.20"],
+          }),
+          host: "loopback,192.168.1.20",
+          renderer: "127.0.0.1",
+          probes: 0,
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        let probes = 0;
+        const config = yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          return yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(makeServerExposureLayer(testCase.interfaces)),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
+                  getDistroIp: () => {
+                    probes += 1;
+                    return Option.some("172.27.0.99");
+                  },
+                }),
+              ),
+              Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform: "win32" })),
+            ),
+          ),
+        );
+
+        assert.equal(config.bootstrap.host, testCase.host);
+        assert.equal(config.httpBaseUrl.href, `http://${testCase.renderer}:5000/`);
+        assert.equal(probes, testCase.probes);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("resolveWsl pins a default-tracking run to the concrete default distro", () =>
@@ -879,9 +967,9 @@ describe("DesktopBackendConfiguration", () => {
 
           assert.equal(config.executablePath, "wsl.exe");
           assert.equal(config.bootstrap.port, 5050);
-          // Binds to 0.0.0.0 inside WSL so the backend is reachable via
-          // both wslhost-forwarded localhost and the distro's eth0 IP.
-          assert.equal(config.bootstrap.host, "0.0.0.0");
+          // The envelope carries the selection verbatim: WSL resolves it
+          // against its own interfaces, so no wildcard and no address here.
+          assert.equal(config.bootstrap.host, "loopback,tailnet,lan");
           assert.equal(config.bootstrap.tailscaleServeEnabled, false);
           assert.notProperty(config.bootstrap, "desktopTelemetryFd");
           assert.notProperty(config.bootstrap, "resourceMonitorPath");

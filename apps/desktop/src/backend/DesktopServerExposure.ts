@@ -10,6 +10,7 @@ import {
   type AdvertisedEndpointProvider,
   type DesktopServerExposureMode,
   type DesktopServerExposureState,
+  type ListenInterfaces,
   type ListenInterfacesInput,
 } from "@t3tools/contracts";
 import { readTailscaleStatus } from "@t3tools/tailscale";
@@ -186,10 +187,13 @@ export type DesktopServerExposureError = typeof DesktopServerExposureError.Type;
 export interface DesktopServerExposureBackendConfig {
   readonly port: number;
   /**
-   * The listen-interface selection in `--host` form. The backend resolves it;
-   * the desktop never sends a pre-resolved address or a wildcard (ADR 0003).
+   * The selection the backend is asked to bind. Callers spell it with
+   * `formatListenInterfaces` for the bootstrap envelope; the backend resolves
+   * it, so the desktop never sends a pre-resolved address or a wildcard, and
+   * the WSL backend resolves the same selection against WSL's own interfaces
+   * (ADR 0003).
    */
-  readonly listenSelection: string;
+  readonly listenInterfaces: ListenInterfaces;
   readonly httpBaseUrl: URL;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -286,7 +290,7 @@ const toContractState = (state: RuntimeState): DesktopServerExposureState => {
 
 const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfig => ({
   port: state.port,
-  listenSelection: state.resolution.listenSelection,
+  listenInterfaces: state.resolution.requested,
   httpBaseUrl: state.httpBaseUrl,
   // Serve has nothing to serve unless a tailnet address actually resolved.
   tailscaleServeEnabled: state.tailscaleServeEnabled && state.resolution.tailnetResolved,

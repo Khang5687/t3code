@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { listenInterfacesForPreset } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -54,7 +55,7 @@ const serverExposureLayer = Layer.succeed(DesktopServerExposure.DesktopServerExp
   getState: Effect.die("unexpected getState"),
   backendConfig: Effect.succeed({
     port: 3773,
-    listenSelection: "loopback",
+    listenInterfaces: listenInterfacesForPreset("local-only"),
     httpBaseUrl: new URL("http://127.0.0.1:3773"),
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
