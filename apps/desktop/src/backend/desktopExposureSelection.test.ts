@@ -49,14 +49,25 @@ describe("resolveDesktopExposure", () => {
     expect(resolution.tailnetResolved).toBe(false);
   });
 
-  it("advertises an explicit address the selection names, even a tailnet one", () => {
+  it("leaves an explicitly named tailnet address to the Tailscale provider", () => {
     const resolution = resolveDesktopExposure({
       requested: { kinds: ["loopback"], addresses: ["100.90.1.2"] },
       networkInterfaces: lanAndTailnet,
     });
     expect(resolution.tailnetSelected).toBe(false);
-    expect(resolution.advertisedHosts).toEqual(["100.90.1.2"]);
     expect(resolution.preset).toBe("custom");
+    // Core advertises no tailnet address, so it never mislabels one as LAN.
+    expect(resolution.advertisedHosts).toEqual([]);
+    // The provider still covers it, so the address is not left unadvertised.
+    expect(resolution.tailnetResolved).toBe(true);
+  });
+
+  it("advertises an explicit non-tailnet address the selection names", () => {
+    const resolution = resolveDesktopExposure({
+      requested: { kinds: ["loopback"], addresses: ["192.168.1.20"] },
+      networkInterfaces: lanAndTailnet,
+    });
+    expect(resolution.advertisedHosts).toEqual(["192.168.1.20"]);
   });
 
   it("reports local-only when the request resolved to loopback alone", () => {

@@ -35,7 +35,7 @@ export interface DesktopExposureResolution {
   /** Hosts the desktop-core endpoints advertise, in bind order. */
   readonly advertisedHosts: ReadonlyArray<string>;
   readonly tailnetSelected: boolean;
-  /** The tailnet was selected *and* an address for it resolved. */
+  /** A tailnet address resolved, so the Tailscale provider has one to advertise. */
   readonly tailnetResolved: boolean;
   /** The request needed more than loopback and got nothing else. */
   readonly unavailable: boolean;
@@ -57,8 +57,10 @@ export const resolveDesktopExposure = (input: {
   // Serve and the tailnet endpoints need a real tailnet address, not just the
   // kind. The `lan` preset carries `tailnet`, so gating on the kind alone would
   // spawn the Tailscale CLI on every LAN machine without Tailscale installed,
-  // raising the macOS "Other apps" TCC prompt for nothing.
-  const tailnetResolved = tailnetSelected && resolved.addresses.some(isTailscaleIpv4Address);
+  // raising the macOS "Other apps" TCC prompt for nothing. Gating on the address
+  // instead also covers a tailnet address named explicitly without the kind,
+  // which core no longer advertises.
+  const tailnetResolved = resolved.addresses.some(isTailscaleIpv4Address);
 
   // The resolver owns the fallback policy, so read its verdict rather than
   // taking a second reading here. Report local-only while leaving the request
@@ -74,9 +76,10 @@ export const resolveDesktopExposure = (input: {
       : resolved.addresses.filter(
           (address) =>
             address !== LOOPBACK_LISTEN_ADDRESS &&
-            // Tailnet addresses belong to the Tailscale endpoint provider, so
-            // core only claims one when the selection named it explicitly.
-            !(tailnetSelected && isTailscaleIpv4Address(address)),
+            // Tailnet addresses belong to the Tailscale endpoint provider, which
+            // labels them as private-network. Core never claims one, so nothing
+            // reaches a client as "Local network" when it is not.
+            !isTailscaleIpv4Address(address),
         );
 
   return {
