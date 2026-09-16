@@ -1,5 +1,6 @@
 import * as NodeOS from "node:os";
 
+import { formatListenInterfaces, type ListenInterfaces } from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -45,10 +46,11 @@ export class DesktopBackendConfiguration extends Context.Service<
       PlatformError.PlatformError
     >;
     // Build a WSL backend start config for the given distro on the given
-    // port. The WSL backend is always loopback-only (the primary owns LAN
-    // exposure when the user opts in), so this takes the port directly and
-    // hardcodes 127.0.0.1. Distro=null means "WSL default distro" and is
-    // forwarded to wsl.exe with no -d flag.
+    // port. The port comes from the caller; the listen-interface selection
+    // comes from DesktopServerExposure, the same one the native backend gets,
+    // and WSL resolves it against its own interfaces (ADR 0003).
+    // Distro=null means "WSL default distro" and is forwarded to wsl.exe with
+    // no -d flag.
     readonly resolveWsl: (input: {
       readonly port: number;
       readonly distro: string | null;
@@ -486,7 +488,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       noBrowser: true,
       port: backendExposure.port,
       t3Home: environment.baseDir,
-      host: backendExposure.listenSelection,
+      host: formatListenInterfaces(backendExposure.listenInterfaces),
       desktopBootstrapToken: input.bootstrapToken,
       tailscaleServeEnabled: backendExposure.tailscaleServeEnabled,
       tailscaleServePort: backendExposure.tailscaleServePort,
@@ -522,6 +524,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
 const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl")(function* (
   input: SharedBootstrapInput & {
     readonly port: number;
+    readonly listenInterfaces: ListenInterfaces;
     readonly distro: string | null;
   },
 ): Effect.fn.Return<
@@ -536,18 +539,18 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
 
-  // Bind to 0.0.0.0 inside WSL so the backend is reachable both via
-  // WSL2's automatic localhost forwarding (wslhost: Windows 127.0.0.1
-  // -> WSL 127.0.0.1) AND via the distro's eth0 IP directly from
-  // Windows. wslhost forwarding is unreliable on some Windows hosts:
-  // the desktop's readiness probe and the renderer's saved-env-style
-  // fetch both saw "Failed to fetch" when the backend only bound to
-  // 127.0.0.1 inside WSL. Binding to 0.0.0.0 plus advertising the
-  // WSL IP as the renderer-visible URL avoids that dependency.
-  // Security-wise this is acceptable for the local-only WSL backend:
-  // the network it exposes on is the WSL-vEthernet network, not the
-  // LAN; the primary owns LAN exposure when the user opts in.
-  const wslBindHost = "0.0.0.0";
+  // The envelope carries the user's selection, not an address: the Linux
+  // backend resolves it against WSL's own interfaces, exactly as the native
+  // backend does against Windows'. A wildcard here would make "Limited to this
+  // machine" untrue for anyone running Tailscale inside the distro.
+  //
+  // The distro's virtual NIC is an ordinary external interface inside WSL, so
+  // only a selection carrying `lan` binds it. Anything narrower leaves the
+  // renderer on WSL2 localhost forwarding (wslhost: Windows 127.0.0.1 -> WSL
+  // 127.0.0.1), and the distro-IP probe is skipped because nothing would
+  // listen there. Explicit addresses are Windows-side and mean nothing to the
+  // distro, so they do not count as a reason to advertise the NIC.
+  const bindsDistroNic = input.listenInterfaces.kinds.includes("lan");
 
   const bootstrap = {
     mode: "desktop" as const,
@@ -556,7 +559,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     // Omit t3Home so the Linux backend uses its own home dir instead of
     // the Windows-side baseDir (which would be a /mnt/c path and share
     // the SQLite file with the primary).
-    host: wslBindHost,
+    host: formatListenInterfaces(input.listenInterfaces),
     desktopBootstrapToken: input.bootstrapToken,
     // PortSchema rejects 0, so when tailscale serve is disabled we still
     // need a valid number in this slot. The backend reads tailscaleServePort
@@ -629,7 +632,9 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // Resolve the selected distro's IPv4 address. In mirrored mode the distro
   // reports a host interface, so use loopback instead; a failed probe also
   // falls back to loopback and preserves the previous behavior.
-  const distroIp = yield* wslEnvironment.getDistroIp(distroForConfig);
+  const distroIp = bindsDistroNic
+    ? yield* wslEnvironment.getDistroIp(distroForConfig)
+    : Option.none<string>();
   const usesSharedNetworkStack = Option.match(distroIp, {
     onNone: () => false,
     onSome: (ip) => isLocalHostIpv4(ip),
@@ -794,6 +799,7 @@ export const make = Effect.gen(function* () {
     return yield* resolveWslStartConfig({
       ...shared,
       port: backendExposure.port,
+      listenInterfaces: backendExposure.listenInterfaces,
       distro: persistedSettings.wslDistro,
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
@@ -858,7 +864,12 @@ export const make = Effect.gen(function* () {
     resolveWsl: (input) =>
       Effect.gen(function* () {
         const shared = yield* sharedInputs;
-        return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
+        const backendExposure = yield* serverExposure.backendConfig;
+        return yield* resolveWslStartConfig({
+          ...shared,
+          ...input,
+          listenInterfaces: backendExposure.listenInterfaces,
+        }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
           Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),

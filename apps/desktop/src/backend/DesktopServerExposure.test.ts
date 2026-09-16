@@ -2,6 +2,7 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { listenInterfacesForPreset } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -161,7 +162,7 @@ describe("DesktopServerExposure", () => {
         // The envelope still asks for the tailnet and LAN; the server resolves
         // it to loopback and warns, rather than the desktop pre-resolving.
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.listenSelection, "loopback,tailnet,lan");
+        assert.deepEqual(backendConfig.listenInterfaces, listenInterfacesForPreset("lan"));
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
       }),
     ),
@@ -207,7 +208,7 @@ describe("DesktopServerExposure", () => {
         });
 
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.listenSelection, "loopback,tailnet,lan");
+        assert.deepEqual(backendConfig.listenInterfaces, listenInterfacesForPreset("lan"));
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
 
         const persisted = yield* settings.get;
@@ -341,7 +342,10 @@ describe("DesktopServerExposure", () => {
         assert.equal(state.mode, "network-accessible");
         assert.equal(state.advertisedHost, null);
         assert.equal(state.endpointUrl, null);
-        assert.equal((yield* serverExposure.backendConfig).listenSelection, "loopback,tailnet,lan");
+        assert.deepEqual(
+          (yield* serverExposure.backendConfig).listenInterfaces,
+          listenInterfacesForPreset("lan"),
+        );
 
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
         assert.deepEqual(

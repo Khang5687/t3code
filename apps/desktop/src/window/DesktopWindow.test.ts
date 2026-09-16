@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { listenInterfacesForPreset } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -157,7 +158,7 @@ const desktopServerExposureLayer = Layer.succeed(DesktopServerExposure.DesktopSe
   getState: Effect.die("unexpected getState"),
   backendConfig: Effect.succeed({
     port: 3773,
-    listenSelection: "loopback",
+    listenInterfaces: listenInterfacesForPreset("local-only"),
     httpBaseUrl: new URL("http://127.0.0.1:3773"),
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
