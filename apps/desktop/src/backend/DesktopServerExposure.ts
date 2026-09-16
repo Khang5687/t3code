@@ -188,7 +188,7 @@ export interface DesktopServerExposureBackendConfig {
    * The listen-interface selection in `--host` form. The backend resolves it;
    * the desktop never sends a pre-resolved address or a wildcard (ADR 0003).
    */
-  readonly listenHost: string;
+  readonly listenSelection: string;
   readonly httpBaseUrl: URL;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -285,7 +285,7 @@ const toContractState = (state: RuntimeState): DesktopServerExposureState => {
 
 const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfig => ({
   port: state.port,
-  listenHost: state.resolution.listenHost,
+  listenSelection: state.resolution.listenSelection,
   httpBaseUrl: state.httpBaseUrl,
   // Serve has nothing to serve unless a tailnet address actually resolved.
   tailscaleServeEnabled: state.tailscaleServeEnabled && state.resolution.tailnetResolved,
@@ -295,7 +295,7 @@ const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfi
 /** Exposure is bind-time state: the selection only takes effect on a fresh backend. */
 const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): boolean =>
   previous.port !== next.port ||
-  previous.resolution.listenHost !== next.resolution.listenHost ||
+  previous.resolution.listenSelection !== next.resolution.listenSelection ||
   previous.localHttpUrl !== next.localHttpUrl;
 
 export const make = Effect.gen(function* () {
@@ -353,7 +353,7 @@ export const make = Effect.gen(function* () {
       networkInterfaces: currentNetworkInterfaces,
       advertisedHostOverride: config.desktopLanHostOverride,
     });
-    yield* Effect.annotateCurrentSpan({ listenHost: next.resolution.listenHost });
+    yield* Effect.annotateCurrentSpan({ listenSelection: next.resolution.listenSelection });
 
     if (next.resolution.unavailable) {
       return yield* new DesktopServerExposureNoNetworkAddressError({ port: previous.port });

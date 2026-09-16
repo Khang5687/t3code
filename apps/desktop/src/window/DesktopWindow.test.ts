@@ -157,7 +157,7 @@ const desktopServerExposureLayer = Layer.succeed(DesktopServerExposure.DesktopSe
   getState: Effect.die("unexpected getState"),
   backendConfig: Effect.succeed({
     port: 3773,
-    listenHost: "loopback",
+    listenSelection: "loopback",
     httpBaseUrl: new URL("http://127.0.0.1:3773"),
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,

@@ -2,7 +2,7 @@ import {
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
   ListenInterfaces,
-  formatListenHostSelection,
+  formatListenInterfaces,
   legacyExposureModeOf,
   listenInterfacesEqual,
   listenInterfacesForLegacyExposureMode,
@@ -568,7 +568,7 @@ export const make = Effect.gen(function* () {
       persist((settings) => setListenInterfaces(settings, listenInterfaces)).pipe(
         Effect.withSpan("desktop.settings.setListenInterfaces", {
           attributes: {
-            listenHost: formatListenHostSelection(normalizeListenInterfaces(listenInterfaces)),
+            listenSelection: formatListenInterfaces(normalizeListenInterfaces(listenInterfaces)),
           },
         }),
       ),

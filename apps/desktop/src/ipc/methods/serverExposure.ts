@@ -3,7 +3,7 @@ import {
   DesktopServerExposureModeSchema,
   DesktopServerExposureStateSchema,
   ListenInterfaces,
-  formatListenHostSelection,
+  formatListenInterfaces,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -54,7 +54,7 @@ export const setServerListenInterfaces = DesktopIpc.makeIpcMethod({
       const change = yield* serverExposure.setListenInterfaces(listenInterfaces);
       if (change.requiresRelaunch) {
         yield* lifecycle.relaunch(
-          `listenInterfaces=${formatListenHostSelection(change.state.listenInterfaces)}`,
+          `listenInterfaces=${formatListenInterfaces(change.state.listenInterfaces)}`,
         );
       }
       return change.state;

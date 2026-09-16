@@ -133,13 +133,13 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
  * through `parseListenHostSelection`, because a selection always carries
  * `loopback`, so the value is never a bare legacy token.
  */
-export const formatListenHostSelection = (selection: ListenInterfaces): string =>
+export const formatListenInterfaces = (selection: ListenInterfaces): string =>
   [...selection.kinds, ...selection.addresses].join(",");
 
 /** Set equality on kinds and addresses; normalization makes the serialized forms comparable. */
 export const listenInterfacesEqual = (a: ListenInterfaces, b: ListenInterfaces): boolean =>
-  formatListenHostSelection(normalizeListenInterfaces(a)) ===
-  formatListenHostSelection(normalizeListenInterfaces(b));
+  formatListenInterfaces(normalizeListenInterfaces(a)) ===
+  formatListenInterfaces(normalizeListenInterfaces(b));
 
 export const ExposurePreset = Schema.Literals(["local-only", "tailscale-only", "lan", "custom"]);
 export type ExposurePreset = typeof ExposurePreset.Type;

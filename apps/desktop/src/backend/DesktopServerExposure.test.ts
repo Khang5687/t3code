@@ -161,7 +161,7 @@ describe("DesktopServerExposure", () => {
         // The envelope still asks for the tailnet and LAN; the server resolves
         // it to loopback and warns, rather than the desktop pre-resolving.
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.listenHost, "loopback,tailnet,lan");
+        assert.equal(backendConfig.listenSelection, "loopback,tailnet,lan");
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
       }),
     ),
@@ -207,7 +207,7 @@ describe("DesktopServerExposure", () => {
         });
 
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.listenHost, "loopback,tailnet,lan");
+        assert.equal(backendConfig.listenSelection, "loopback,tailnet,lan");
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
 
         const persisted = yield* settings.get;
@@ -341,7 +341,7 @@ describe("DesktopServerExposure", () => {
         assert.equal(state.mode, "network-accessible");
         assert.equal(state.advertisedHost, null);
         assert.equal(state.endpointUrl, null);
-        assert.equal((yield* serverExposure.backendConfig).listenHost, "loopback,tailnet,lan");
+        assert.equal((yield* serverExposure.backendConfig).listenSelection, "loopback,tailnet,lan");
 
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
         assert.deepEqual(

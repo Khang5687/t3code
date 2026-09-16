@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ListenInterfaces,
   exposurePresetOf,
-  formatListenHostSelection,
+  formatListenInterfaces,
   listenInterfacesEqual,
   legacyExposureModeOf,
   listenInterfacesForLegacyExposureMode,
@@ -93,7 +93,7 @@ describe("legacy exposure mode mapping", () => {
   });
 });
 
-describe("formatListenHostSelection", () => {
+describe("formatListenInterfaces", () => {
   it("round-trips every selection back through the parser", () => {
     for (const selection of [
       decode({ kinds: ["loopback"] }),
@@ -102,7 +102,7 @@ describe("formatListenHostSelection", () => {
       decode({ kinds: ["loopback"], addresses: ["10.0.0.5"] }),
       decode({ kinds: ["loopback", "lan"], addresses: ["10.0.0.5", "192.168.1.2"] }),
     ]) {
-      expect(parseListenHostSelection(formatListenHostSelection(selection))).toEqual({
+      expect(parseListenHostSelection(formatListenInterfaces(selection))).toEqual({
         _tag: "interfaces",
         interfaces: selection,
       });
@@ -110,10 +110,8 @@ describe("formatListenHostSelection", () => {
   });
 
   it("never emits a bare legacy host or a wildcard", () => {
-    expect(formatListenHostSelection(listenInterfacesForPreset("local-only"))).toBe("loopback");
-    expect(formatListenHostSelection(listenInterfacesForPreset("lan"))).toBe(
-      "loopback,tailnet,lan",
-    );
+    expect(formatListenInterfaces(listenInterfacesForPreset("local-only"))).toBe("loopback");
+    expect(formatListenInterfaces(listenInterfacesForPreset("lan"))).toBe("loopback,tailnet,lan");
   });
 });
 

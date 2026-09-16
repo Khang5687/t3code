@@ -1,6 +1,6 @@
 import {
   exposurePresetOf,
-  formatListenHostSelection,
+  formatListenInterfaces,
   legacyExposureModeOf,
   listenInterfacesForPreset,
   normalizeListenInterfaces,
@@ -47,7 +47,7 @@ export interface DesktopExposureResolution {
   /** Derived from the *effective* selection, so a request that resolved to nothing reads local-only. */
   readonly mode: LegacyExposureMode;
   /** `--host` spelling of `requested`; never a resolved IP and never a wildcard. */
-  readonly listenHost: string;
+  readonly listenSelection: string;
   readonly resolvedAddresses: ReadonlyArray<string>;
   readonly warnings: ReadonlyArray<string>;
   /** Hosts the desktop-core endpoints advertise, in bind order. */
@@ -104,7 +104,7 @@ export const resolveDesktopExposure = (input: {
     requested,
     preset: exposurePresetOf(requested),
     mode: legacyExposureModeOf(effective),
-    listenHost: formatListenHostSelection(requested),
+    listenSelection: formatListenInterfaces(requested),
     resolvedAddresses: resolved.addresses,
     warnings: resolved.warnings,
     advertisedHosts,

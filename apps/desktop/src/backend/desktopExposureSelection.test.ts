@@ -69,17 +69,17 @@ describe("resolveDesktopExposure", () => {
     expect(resolution.advertisedHosts).toEqual([]);
     expect(resolution.warnings).toContain("listening on loopback only");
     // The request itself survives, so the envelope still asks for the tailnet.
-    expect(resolution.listenHost).toBe("loopback,tailnet,lan");
+    expect(resolution.listenSelection).toBe("loopback,tailnet,lan");
   });
 
   it("never emits a resolved address or a wildcard as the listen host", () => {
     for (const preset of ["local-only", "tailscale-only", "lan"] as const) {
-      const { listenHost } = resolveDesktopExposure({
+      const { listenSelection } = resolveDesktopExposure({
         requested: listenInterfacesForPreset(preset),
         networkInterfaces: lanAndTailnet,
       });
-      expect(listenHost).not.toContain("0.0.0.0");
-      expect(listenHost).not.toMatch(/\d+\.\d+\.\d+\.\d+/u);
+      expect(listenSelection).not.toContain("0.0.0.0");
+      expect(listenSelection).not.toMatch(/\d+\.\d+\.\d+\.\d+/u);
     }
   });
 
