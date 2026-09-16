@@ -19,8 +19,11 @@ export type ListenAddressKind = "loopback" | "wildcard" | "explicit";
  */
 export interface ResolvedListenAddress {
   readonly kind: ListenAddressKind;
-  /** What the HTTP server passes to `listen()`. */
-  readonly bindHost: string;
+  /**
+   * Every address the server opens a listening socket on, loopback first
+   * (ADR 0003). A legacy verbatim host resolves to exactly one entry.
+   */
+  readonly bindHosts: ReadonlyArray<string>;
   /** Anything but loopback may receive connections from other machines. */
   readonly remoteReachable: boolean;
   /** The raw `--host` value; persisted runtime state and telemetry echo it. */
@@ -87,11 +90,9 @@ const resolveConnectionHost = (
 };
 
 /**
- * Interim single bind. A selection can resolve to several addresses, but one
- * `HttpServerLive` opens one socket, so the first non-loopback address wins —
- * that is what makes `--host tailnet` reachable on the tailnet rather than on
- * loopback. Every address that lost is named in a warning. The multi-bind
- * ticket replaces this with one listener per resolved address.
+ * Every selected interface is bound, loopback included (ADR 0003). Loopback
+ * leads the list, so local clients and the `origin` in runtime state stay on
+ * 127.0.0.1 while remote clients are pointed at the first non-loopback address.
  */
 const resolveFromInterfaces = (
   host: string | undefined,
@@ -99,26 +100,18 @@ const resolveFromInterfaces = (
   interfaces: NetworkInterfacesMap,
 ): ResolvedListenAddress => {
   const resolved = resolveListenAddresses(selection, interfaces);
-  const bindHost =
-    resolved.addresses.find((address) => address !== LOOPBACK_LISTEN_ADDRESS) ??
-    LOOPBACK_LISTEN_ADDRESS;
-  const dropped = resolved.addresses.filter((address) => address !== bindHost);
-  const kind: ListenAddressKind = isLoopbackHost(bindHost) ? "loopback" : "explicit";
+  const bindHosts =
+    resolved.addresses.length === 0 ? [LOOPBACK_LISTEN_ADDRESS] : resolved.addresses;
+  const remote = bindHosts.find((address) => !isLoopbackHost(address));
 
   return {
-    kind,
-    bindHost,
-    remoteReachable: kind !== "loopback",
+    kind: remote === undefined ? "loopback" : "explicit",
+    bindHosts,
+    remoteReachable: remote !== undefined,
     configuredHost: host,
-    urlHost: formatHostForUrl(bindHost),
-    connectionHost: bindHost,
-    warnings:
-      dropped.length === 0
-        ? resolved.warnings
-        : [
-            ...resolved.warnings,
-            `binding ${bindHost} only; ${dropped.join(", ")} also resolved but binding every selected interface is not implemented yet`,
-          ],
+    urlHost: formatHostForUrl(bindHosts[0] ?? LOOPBACK_LISTEN_ADDRESS),
+    connectionHost: remote ?? LOOPBACK_LISTEN_ADDRESS,
+    warnings: resolved.warnings,
   };
 };
 
@@ -142,7 +135,7 @@ export const resolveListenAddress = (
       : "explicit";
   return {
     kind,
-    bindHost: host ?? "127.0.0.1",
+    bindHosts: [host ?? LOOPBACK_LISTEN_ADDRESS],
     remoteReachable: kind !== "loopback",
     configuredHost: host,
     urlHost: host !== undefined && kind !== "wildcard" ? formatHostForUrl(host) : undefined,

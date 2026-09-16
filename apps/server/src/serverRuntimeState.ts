@@ -13,6 +13,9 @@ export const PersistedServerRuntimeState = Schema.Struct({
   host: Schema.optional(Schema.String),
   port: Schema.Int,
   origin: Schema.String,
+  // Every address the server bound, loopback first. `origin` names only the
+  // one a local CLI should dial.
+  addresses: Schema.optional(Schema.Array(Schema.String)),
   // Present when the server fronts a dev web server (VITE_DEV_SERVER_URL).
   // Dev is single-origin: browsers must pair through this URL, not `origin`.
   devUrl: Schema.optional(Schema.String),
@@ -41,7 +44,10 @@ const decodePersistedServerRuntimeState = Schema.decodeUnknownEffect(
 );
 
 export const makePersistedServerRuntimeState = (input: {
-  readonly listen: Pick<ResolvedListenAddress, "configuredHost" | "urlHost" | "warnings">;
+  readonly listen: Pick<
+    ResolvedListenAddress,
+    "configuredHost" | "urlHost" | "warnings" | "bindHosts"
+  >;
   readonly devUrl: URL | undefined;
   readonly port: number;
 }): Effect.Effect<PersistedServerRuntimeState> =>
@@ -52,6 +58,7 @@ export const makePersistedServerRuntimeState = (input: {
     port: input.port,
     // Wildcard binds answer on loopback, so local CLIs reach them there.
     origin: `http://${input.listen.urlHost ?? "127.0.0.1"}:${input.port}`,
+    addresses: input.listen.bindHosts,
     ...(input.devUrl ? { devUrl: input.devUrl.toString() } : {}),
     ...(input.listen.warnings.length > 0 ? { warnings: input.listen.warnings } : {}),
     startedAt: DateTime.formatIso(now),

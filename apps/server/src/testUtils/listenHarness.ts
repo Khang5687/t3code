@@ -58,8 +58,16 @@ export interface ListenHarness {
   readonly port: number;
   /** Real TCP connect to `address:port`; never resolves hostnames. */
   readonly probe: (address: string) => Effect.Effect<TcpProbeOutcome>;
-  /** Policy as served by the unauthenticated `/api/auth/session` descriptor. */
+  /** Policy as served by the unauthenticated `/api/auth/session` descriptor, over loopback. */
   readonly readAuthPolicy: Effect.Effect<ServerAuthPolicy, ListenHarnessError>;
+  /**
+   * The same descriptor read over one specific bound address. A TCP probe only
+   * proves the socket is open; this proves that address serves the real routes,
+   * which is what distinguishes a true per-address bind from a single listener.
+   */
+  readonly readAuthPolicyAt: (
+    address: string,
+  ) => Effect.Effect<ServerAuthPolicy, ListenHarnessError>;
 }
 
 const harnessApi = HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth);
@@ -103,8 +111,11 @@ const tcpProbe = (address: string, port: number): Effect.Effect<TcpProbeOutcome>
   Effect.callback<TcpProbeOutcome>((resume) => {
     const socket = NodeNet.connect({ host: address, port });
     socket.once("connect", () => {
-      socket.destroy();
-      resume(Effect.succeed({ outcome: "accept" }));
+      // Close politely and wait for the socket to finish closing: a `destroy()`
+      // here leaves the server reaping a half-open connection, which races the
+      // scope teardown at the end of the test.
+      socket.once("close", () => resume(Effect.succeed({ outcome: "accept" })));
+      socket.end();
     });
     socket.once("error", (error: NodeJS.ErrnoException) => {
       const code = error.code ?? "UNKNOWN";
@@ -117,10 +128,15 @@ const tcpProbe = (address: string, port: number): Effect.Effect<TcpProbeOutcome>
     return Effect.sync(() => socket.destroy());
   });
 
-const readSessionPolicy = (port: number): Effect.Effect<ServerAuthPolicy, ListenHarnessError> =>
+const readSessionPolicy = (
+  address: string,
+  port: number,
+): Effect.Effect<ServerAuthPolicy, ListenHarnessError> =>
   Effect.gen(function* () {
     const response = yield* HttpClient.execute(
-      HttpClientRequest.get(`http://127.0.0.1:${port}/api/auth/session`),
+      HttpClientRequest.get(
+        `http://${ListenAddress.formatHostForUrl(address)}:${port}/api/auth/session`,
+      ),
     ).pipe(Effect.mapError((cause) => new ListenHarnessError({ cause })));
     if (response.status !== 200) {
       return yield* Effect.fail(
@@ -155,6 +171,7 @@ export const startListenHarness = (
       listen,
       port,
       probe: (target) => tcpProbe(target, port),
-      readAuthPolicy: readSessionPolicy(port),
+      readAuthPolicy: readSessionPolicy("127.0.0.1", port),
+      readAuthPolicyAt: (address) => readSessionPolicy(address, port),
     } satisfies ListenHarness;
   });

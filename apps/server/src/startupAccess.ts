@@ -10,6 +10,8 @@ export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
   readonly token: string;
   readonly pairingUrl: string;
+  /** Every address the server bound; the connection string names only the one remote clients dial. */
+  readonly boundAddresses: ReadonlyArray<string>;
   /** Why the bind differs from the requested exposure; printed above the ready line. */
   readonly warnings: ReadonlyArray<string>;
 }
@@ -65,6 +67,7 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
   [
     ...accessInfo.warnings.map((warning) => `Warning: ${warning}`),
     "T3 Code server is ready.",
+    `Listening on: ${accessInfo.boundAddresses.join(", ")}`,
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
     `Pairing URL: ${accessInfo.pairingUrl}`,
@@ -88,6 +91,7 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
     connectionString,
     token: issued.credential,
     pairingUrl: buildPairingUrl(connectionString, issued.credential),
+    boundAddresses: listen.bindHosts,
     warnings: listen.warnings,
   } satisfies HeadlessServeAccessInfo;
 });
