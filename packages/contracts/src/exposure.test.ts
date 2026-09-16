@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ListenInterfaces,
   exposurePresetOf,
+  formatListenInterfaces,
+  listenInterfacesEqual,
   legacyExposureModeOf,
   listenInterfacesForLegacyExposureMode,
   listenInterfacesForPreset,
@@ -88,6 +90,65 @@ describe("legacy exposure mode mapping", () => {
       "network-accessible",
     );
     expect(legacyExposureModeOf(decode({ kinds: ["tailnet"] }))).toBe("network-accessible");
+  });
+});
+
+describe("formatListenInterfaces", () => {
+  it("round-trips every selection back through the parser", () => {
+    for (const selection of [
+      decode({ kinds: ["loopback"] }),
+      decode({ kinds: ["loopback", "tailnet"] }),
+      decode({ kinds: ["loopback", "tailnet", "lan"] }),
+      decode({ kinds: ["loopback"], addresses: ["10.0.0.5"] }),
+      decode({ kinds: ["loopback", "lan"], addresses: ["10.0.0.5", "192.168.1.2"] }),
+    ]) {
+      expect(parseListenHostSelection(formatListenInterfaces(selection))).toEqual({
+        _tag: "interfaces",
+        interfaces: selection,
+      });
+    }
+  });
+
+  it("never emits a bare legacy host or a wildcard", () => {
+    expect(formatListenInterfaces(listenInterfacesForPreset("local-only"))).toBe("loopback");
+    expect(formatListenInterfaces(listenInterfacesForPreset("lan"))).toBe("loopback,tailnet,lan");
+  });
+});
+
+describe("listenInterfacesEqual", () => {
+  it("compares as sets, ignoring input order and duplicates", () => {
+    expect(
+      listenInterfacesEqual(
+        normalizeListenInterfaces({ kinds: ["lan", "tailnet", "lan"] }),
+        normalizeListenInterfaces({ kinds: ["tailnet", "lan", "loopback"] }),
+      ),
+    ).toBe(true);
+    expect(
+      listenInterfacesEqual(
+        listenInterfacesForPreset("lan"),
+        listenInterfacesForPreset("tailscale-only"),
+      ),
+    ).toBe(false);
+    expect(
+      listenInterfacesEqual(
+        listenInterfacesForPreset("local-only"),
+        normalizeListenInterfaces({ kinds: ["loopback"], addresses: ["10.0.0.5"] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores address order, which the serialized form does not", () => {
+    const one = normalizeListenInterfaces({
+      kinds: ["loopback"],
+      addresses: ["10.0.0.5", "192.168.1.2"],
+    });
+    const other = normalizeListenInterfaces({
+      kinds: ["loopback"],
+      addresses: ["192.168.1.2", "10.0.0.5"],
+    });
+
+    expect(formatListenInterfaces(one)).not.toBe(formatListenInterfaces(other));
+    expect(listenInterfacesEqual(one, other)).toBe(true);
   });
 });
 

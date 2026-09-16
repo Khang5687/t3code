@@ -38,12 +38,13 @@ const serverExposureLayer = Layer.succeed(DesktopServerExposure.DesktopServerExp
   getState: Effect.die("unexpected getState"),
   backendConfig: Effect.succeed({
     port: 4888,
-    bindHost: "0.0.0.0",
+    listenSelection: "loopback,tailnet,lan",
     httpBaseUrl: new URL("http://127.0.0.1:4888"),
     tailscaleServeEnabled: true,
     tailscaleServePort: 8443,
   }),
   configureFromSettings: () => Effect.die("unexpected configureFromSettings"),
+  setListenInterfaces: () => Effect.die("unexpected setListenInterfaces"),
   setMode: () => Effect.die("unexpected setMode"),
   setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
   getAdvertisedEndpoints: Effect.succeed([]),
@@ -239,7 +240,8 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.mode, "desktop");
         assert.equal(first.bootstrap.noBrowser, true);
         assert.equal(first.bootstrap.port, 4888);
-        assert.equal(first.bootstrap.host, "0.0.0.0");
+        // The envelope carries the selection, never a wildcard: the server resolves it.
+        assert.equal(first.bootstrap.host, "loopback,tailnet,lan");
         assert.equal(first.bootstrap.t3Home, environment.baseDir);
         assert.equal(first.bootstrap.tailscaleServeEnabled, true);
         assert.equal(first.bootstrap.tailscaleServePort, 8443);

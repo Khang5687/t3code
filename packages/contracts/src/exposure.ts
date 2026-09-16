@@ -127,6 +127,35 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
   return { _tag: "interfaces", interfaces: normalizeListenInterfaces({ kinds, addresses }) };
 };
 
+/**
+ * The `--host` spelling of a selection, for the desktop's bootstrap envelope:
+ * the client sends what was asked for and the server resolves it. Round-trips
+ * through `parseListenHostSelection`, because a selection always carries
+ * `loopback`, so the value is never a bare legacy token.
+ */
+export const formatListenInterfaces = (selection: ListenInterfaces): string =>
+  [...selection.kinds, ...selection.addresses].join(",");
+
+const sameMembers = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => {
+  if (a.length !== b.length) {
+    return false;
+  }
+  const members = new Set<string>(a);
+  return b.every((value) => members.has(value));
+};
+
+/**
+ * Set equality on kinds and addresses. Deliberately not a comparison of the
+ * serialized form: equality is a property of the selection, not of its `--host`
+ * spelling, and normalization fixes the order of kinds but not of addresses.
+ * Both sides are deduped first, so equal length plus containment is set equality.
+ */
+export const listenInterfacesEqual = (a: ListenInterfaces, b: ListenInterfaces): boolean => {
+  const left = normalizeListenInterfaces(a);
+  const right = normalizeListenInterfaces(b);
+  return sameMembers(left.kinds, right.kinds) && sameMembers(left.addresses, right.addresses);
+};
+
 export const ExposurePreset = Schema.Literals(["local-only", "tailscale-only", "lan", "custom"]);
 export type ExposurePreset = typeof ExposurePreset.Type;
 export type NamedExposurePreset = Exclude<ExposurePreset, "custom">;

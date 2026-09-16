@@ -5,9 +5,13 @@ import { isTailscaleIpv4Address } from "./tailscale.ts";
 /** Structurally matches `os.networkInterfaces()` so callers can pass it straight through. */
 export interface NetworkInterfaceAddress {
   readonly address: string;
-  readonly family: string;
+  /** Node reports "IPv4" on most builds and the numeric 4 on some; both arrive here. */
+  readonly family: string | number;
   readonly internal: boolean;
 }
+
+const isIpv4Family = (family: string | number): boolean =>
+  family === "IPv4" || family === 4 || family === "4";
 export type NetworkInterfaceMap = Readonly<
   Record<string, ReadonlyArray<NetworkInterfaceAddress> | undefined>
 >;
@@ -15,6 +19,11 @@ export type NetworkInterfaceMap = Readonly<
 export interface ResolvedListenAddresses {
   readonly addresses: ReadonlyArray<string>;
   readonly warnings: ReadonlyArray<string>;
+  /**
+   * The selection asked for more than loopback and nothing else resolved. The
+   * verdict lives here so callers read it rather than deriving it again.
+   */
+  readonly loopbackOnly: boolean;
 }
 
 export const LOOPBACK_LISTEN_ADDRESS = "127.0.0.1";
@@ -31,7 +40,10 @@ export function resolveListenAddresses(
 ): ResolvedListenAddresses {
   const ipv4 = Object.values(interfaces)
     .flat()
-    .filter((entry): entry is NetworkInterfaceAddress => entry?.family === "IPv4");
+    .filter(
+      (entry): entry is NetworkInterfaceAddress =>
+        entry !== undefined && isIpv4Family(entry.family),
+    );
   const external = ipv4.filter((entry) => !entry.internal).map((entry) => entry.address);
   const tailnet = external.filter(isTailscaleIpv4Address);
   const lan = external.filter((address) => !isTailscaleIpv4Address(address));
@@ -60,9 +72,10 @@ export function resolveListenAddresses(
   const requestedMoreThanLoopback =
     selection.kinds.some((kind) => kind !== "loopback") ||
     selection.addresses.some((address) => address !== LOOPBACK_LISTEN_ADDRESS);
-  if (requestedMoreThanLoopback && addresses.size === 1) {
+  const loopbackOnly = requestedMoreThanLoopback && addresses.size === 1;
+  if (loopbackOnly) {
     warnings.push("listening on loopback only");
   }
 
-  return { addresses: [...addresses], warnings };
+  return { addresses: [...addresses], warnings, loopbackOnly };
 }

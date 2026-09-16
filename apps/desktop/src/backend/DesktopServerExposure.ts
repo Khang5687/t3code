@@ -4,12 +4,15 @@ import {
 } from "@t3tools/shared/advertisedEndpoint";
 import {
   DesktopServerExposureModeSchema,
+  listenInterfacesEqual,
+  listenInterfacesForLegacyExposureMode,
   type AdvertisedEndpoint,
   type AdvertisedEndpointProvider,
   type DesktopServerExposureMode,
   type DesktopServerExposureState,
+  type ListenInterfacesInput,
 } from "@t3tools/contracts";
-import { isTailscaleIpv4Address, readTailscaleStatus } from "@t3tools/tailscale";
+import { readTailscaleStatus } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -23,27 +26,15 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopNetworkInterfaces from "./DesktopNetworkInterfaces.ts";
+import {
+  resolveDesktopExposure,
+  type DesktopExposureResolution,
+} from "./desktopExposureSelection.ts";
 import { resolveTailscaleAdvertisedEndpoints } from "./tailscaleEndpointProvider.ts";
 
 const TAILSCALE_STATUS_CACHE_TTL = Duration.seconds(60);
 
 export const DESKTOP_LOOPBACK_HOST = "127.0.0.1";
-const DESKTOP_LAN_BIND_HOST = "0.0.0.0";
-
-interface ResolvedDesktopServerExposure {
-  readonly mode: DesktopServerExposureMode;
-  readonly bindHost: string;
-  readonly localHttpUrl: string;
-  readonly localWsUrl: string;
-  readonly endpointUrl: string | null;
-  readonly advertisedHost: string | null;
-}
-
-interface DesktopAdvertisedEndpointInput {
-  readonly port: number;
-  readonly exposure: ResolvedDesktopServerExposure;
-  readonly customHttpsEndpointUrls?: readonly string[];
-}
 
 const DESKTOP_CORE_ENDPOINT_PROVIDER: AdvertisedEndpointProvider = {
   id: "desktop-core",
@@ -59,80 +50,12 @@ const DESKTOP_MANUAL_ENDPOINT_PROVIDER: AdvertisedEndpointProvider = {
   isAddon: false,
 };
 
-const normalizeOptionalHost = (value: string | undefined): string | undefined => {
-  const normalized = value?.trim();
-  return normalized && normalized.length > 0 ? normalized : undefined;
-};
-
-const isUsableLanIpv4Address = (address: string): boolean =>
-  !address.startsWith("127.") &&
-  !address.startsWith("169.254.") &&
-  !isTailscaleIpv4Address(address);
-
 const isHttpsEndpointUrl = (value: string): boolean => {
   try {
     return new URL(value).protocol === "https:";
   } catch {
     return false;
   }
-};
-
-const resolveLanAdvertisedHost = (
-  networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces,
-  explicitHost: string | undefined,
-): string | null => {
-  const normalizedExplicitHost = normalizeOptionalHost(explicitHost);
-  if (normalizedExplicitHost) {
-    return normalizedExplicitHost;
-  }
-
-  for (const interfaceAddresses of Object.values(networkInterfaces)) {
-    if (!interfaceAddresses) continue;
-
-    for (const address of interfaceAddresses) {
-      if (address.internal) continue;
-      if (address.family !== "IPv4") continue;
-      if (!isUsableLanIpv4Address(address.address)) continue;
-      return address.address;
-    }
-  }
-
-  return null;
-};
-
-const resolveDesktopServerExposure = (input: {
-  readonly mode: DesktopServerExposureMode;
-  readonly port: number;
-  readonly networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces;
-  readonly advertisedHostOverride?: string;
-}): ResolvedDesktopServerExposure => {
-  const localHttpUrl = `http://${DESKTOP_LOOPBACK_HOST}:${input.port}`;
-  const localWsUrl = `ws://${DESKTOP_LOOPBACK_HOST}:${input.port}`;
-
-  if (input.mode === "local-only") {
-    return {
-      mode: input.mode,
-      bindHost: DESKTOP_LOOPBACK_HOST,
-      localHttpUrl,
-      localWsUrl,
-      endpointUrl: null,
-      advertisedHost: null,
-    };
-  }
-
-  const advertisedHost = resolveLanAdvertisedHost(
-    input.networkInterfaces,
-    input.advertisedHostOverride,
-  );
-
-  return {
-    mode: input.mode,
-    bindHost: DESKTOP_LAN_BIND_HOST,
-    localHttpUrl,
-    localWsUrl,
-    endpointUrl: advertisedHost ? `http://${advertisedHost}:${input.port}` : null,
-    advertisedHost,
-  };
 };
 
 const createDesktopEndpoint = (
@@ -153,33 +76,39 @@ const createManualEndpoint = (
     source: "user",
   });
 
-const resolveDesktopCoreAdvertisedEndpoints = (
-  input: DesktopAdvertisedEndpointInput,
-): readonly AdvertisedEndpoint[] => {
+const resolveDesktopCoreAdvertisedEndpoints = (input: {
+  readonly port: number;
+  readonly localHttpUrl: string;
+  readonly advertisedHosts: ReadonlyArray<string>;
+  readonly customHttpsEndpointUrls?: readonly string[];
+}): readonly AdvertisedEndpoint[] => {
   const endpoints: AdvertisedEndpoint[] = [
     createDesktopEndpoint({
       id: `desktop-loopback:${input.port}`,
       label: "This machine",
-      httpBaseUrl: input.exposure.localHttpUrl,
+      httpBaseUrl: input.localHttpUrl,
       reachability: "loopback",
       status: "available",
       description: "Loopback endpoint for this desktop app.",
     }),
   ];
 
-  if (input.exposure.endpointUrl) {
+  // One endpoint per address the selection resolved to. Only the first is the
+  // default; the rest are alternate routes to the same backend.
+  input.advertisedHosts.forEach((host, index) => {
+    const endpointUrl = `http://${host}:${input.port}`;
     endpoints.push(
       createDesktopEndpoint({
-        id: `desktop-lan:${input.exposure.endpointUrl}`,
+        id: `desktop-lan:${endpointUrl}`,
         label: "Local network",
-        httpBaseUrl: input.exposure.endpointUrl,
+        httpBaseUrl: endpointUrl,
         reachability: "lan",
         status: "available",
-        isDefault: true,
+        ...(index === 0 ? { isDefault: true } : {}),
         description: "Reachable from devices on the same network.",
       }),
     );
-  }
+  });
 
   for (const customEndpointUrl of input.customHttpsEndpointUrls ?? []) {
     try {
@@ -256,7 +185,11 @@ export type DesktopServerExposureError = typeof DesktopServerExposureError.Type;
 
 export interface DesktopServerExposureBackendConfig {
   readonly port: number;
-  readonly bindHost: string;
+  /**
+   * The listen-interface selection in `--host` form. The backend resolves it;
+   * the desktop never sends a pre-resolved address or a wildcard (ADR 0003).
+   */
+  readonly listenSelection: string;
   readonly httpBaseUrl: URL;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -275,6 +208,9 @@ export class DesktopServerExposure extends Context.Service<
     readonly configureFromSettings: (input: {
       readonly port: number;
     }) => Effect.Effect<DesktopServerExposureState>;
+    readonly setListenInterfaces: (
+      listenInterfaces: ListenInterfacesInput,
+    ) => Effect.Effect<DesktopServerExposureChange, DesktopServerExposureSetModeError>;
     readonly setMode: (
       mode: DesktopServerExposureMode,
     ) => Effect.Effect<DesktopServerExposureChange, DesktopServerExposureSetModeError>;
@@ -287,128 +223,81 @@ export class DesktopServerExposure extends Context.Service<
 >()("@t3tools/desktop/backend/DesktopServerExposure") {}
 
 interface RuntimeState {
-  readonly requestedMode: DesktopServerExposureMode;
-  readonly mode: DesktopServerExposureMode;
+  readonly resolution: DesktopExposureResolution;
   readonly port: number;
-  readonly bindHost: string;
   readonly localHttpUrl: string;
-  readonly localWsUrl: string;
   readonly httpBaseUrl: URL;
-  readonly endpointUrl: Option.Option<string>;
-  readonly advertisedHost: Option.Option<string>;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
 }
 
-interface ResolvedRuntimeState {
-  readonly state: RuntimeState;
-  readonly unavailable: boolean;
-}
-
-const initialRuntimeState = (): RuntimeState =>
-  runtimeStateFromResolvedExposure({
-    requestedMode: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.serverExposureMode,
-    settings: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
-    exposure: resolveDesktopServerExposure({
-      mode: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.serverExposureMode,
-      port: 0,
-      networkInterfaces: {},
-    }),
-    port: 0,
+function makeRuntimeState(input: {
+  readonly requested: ListenInterfacesInput;
+  readonly settings: DesktopAppSettings.DesktopSettings;
+  readonly port: number;
+  readonly networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces;
+  readonly advertisedHostOverride: Option.Option<string>;
+}): RuntimeState {
+  const localHttpUrl = `http://${DESKTOP_LOOPBACK_HOST}:${input.port}`;
+  const advertisedHostOverride = Option.getOrUndefined(input.advertisedHostOverride);
+  const resolution = resolveDesktopExposure({
+    requested: input.requested,
+    networkInterfaces: input.networkInterfaces,
+    ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
   });
 
-const toContractState = (state: RuntimeState): DesktopServerExposureState => ({
-  mode: state.mode,
-  endpointUrl: Option.getOrNull(state.endpointUrl),
-  advertisedHost: Option.getOrNull(state.advertisedHost),
-  tailscaleServeEnabled: state.tailscaleServeEnabled,
-  tailscaleServePort: state.tailscaleServePort,
-});
-
-const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfig => ({
-  port: state.port,
-  bindHost: state.bindHost,
-  httpBaseUrl: state.httpBaseUrl,
-  tailscaleServeEnabled: state.tailscaleServeEnabled,
-  tailscaleServePort: state.tailscaleServePort,
-});
-
-const toResolvedExposure = (state: RuntimeState): ResolvedDesktopServerExposure => ({
-  mode: state.mode,
-  bindHost: state.bindHost,
-  localHttpUrl: state.localHttpUrl,
-  localWsUrl: state.localWsUrl,
-  endpointUrl: Option.getOrNull(state.endpointUrl),
-  advertisedHost: Option.getOrNull(state.advertisedHost),
-});
-
-function runtimeStateFromResolvedExposure(input: {
-  readonly requestedMode: DesktopServerExposureMode;
-  readonly settings: DesktopAppSettings.DesktopSettings;
-  readonly exposure: ResolvedDesktopServerExposure;
-  readonly port: number;
-}): RuntimeState {
   return {
-    requestedMode: input.requestedMode,
-    mode: input.exposure.mode,
+    resolution,
     port: input.port,
-    bindHost: input.exposure.bindHost,
-    localHttpUrl: input.exposure.localHttpUrl,
-    localWsUrl: input.exposure.localWsUrl,
-    httpBaseUrl: new URL(input.exposure.localHttpUrl),
-    endpointUrl: Option.fromNullishOr(input.exposure.endpointUrl),
-    advertisedHost: Option.fromNullishOr(input.exposure.advertisedHost),
+    localHttpUrl,
+    httpBaseUrl: new URL(localHttpUrl),
     tailscaleServeEnabled: input.settings.tailscaleServeEnabled,
     tailscaleServePort: input.settings.tailscaleServePort,
   };
 }
 
-function resolveRuntimeState(input: {
-  readonly requestedMode: DesktopServerExposureMode;
-  readonly settings: DesktopAppSettings.DesktopSettings;
-  readonly port: number;
-  readonly networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces;
-  readonly advertisedHostOverride: Option.Option<string>;
-}): ResolvedRuntimeState {
-  const advertisedHostOverride = Option.getOrUndefined(input.advertisedHostOverride);
-  const requestedExposure = resolveDesktopServerExposure({
-    mode: input.requestedMode,
-    port: input.port,
-    networkInterfaces: input.networkInterfaces,
-    ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
+const initialRuntimeState = (): RuntimeState =>
+  makeRuntimeState({
+    requested: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.listenInterfaces,
+    settings: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+    port: 0,
+    networkInterfaces: {},
+    advertisedHostOverride: Option.none(),
   });
-  const unavailable =
-    input.requestedMode === "network-accessible" &&
-    requestedExposure.endpointUrl === null &&
-    !Object.values(input.networkInterfaces).some((addresses) =>
-      addresses?.some(
-        (address) =>
-          !address.internal && address.family === "IPv4" && isTailscaleIpv4Address(address.address),
-      ),
-    );
-  const exposure = unavailable
-    ? resolveDesktopServerExposure({
-        mode: "local-only",
-        port: input.port,
-        networkInterfaces: input.networkInterfaces,
-        ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
-      })
-    : requestedExposure;
 
+const advertisedHostOf = (state: RuntimeState): string | null =>
+  state.resolution.advertisedHosts[0] ?? null;
+
+const toContractState = (state: RuntimeState): DesktopServerExposureState => {
+  const advertisedHost = advertisedHostOf(state);
   return {
-    state: runtimeStateFromResolvedExposure({
-      requestedMode: input.requestedMode,
-      settings: input.settings,
-      exposure,
-      port: input.port,
-    }),
-    unavailable,
+    mode: state.resolution.mode,
+    listenInterfaces: state.resolution.requested,
+    preset: state.resolution.preset,
+    resolvedAddresses: state.resolution.resolvedAddresses,
+    warnings: state.resolution.warnings,
+    tailscaleServeAvailable: state.resolution.tailnetResolved,
+    endpointUrl: advertisedHost ? `http://${advertisedHost}:${state.port}` : null,
+    advertisedHost,
+    tailscaleServeEnabled: state.tailscaleServeEnabled,
+    tailscaleServePort: state.tailscaleServePort,
   };
-}
+};
 
+const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfig => ({
+  port: state.port,
+  listenSelection: state.resolution.listenSelection,
+  httpBaseUrl: state.httpBaseUrl,
+  // Serve has nothing to serve unless a tailnet address actually resolved.
+  tailscaleServeEnabled: state.tailscaleServeEnabled && state.resolution.tailnetResolved,
+  tailscaleServePort: state.tailscaleServePort,
+});
+
+/** Exposure is bind-time state: the selection only takes effect on a fresh backend. */
 const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): boolean =>
   previous.port !== next.port ||
-  previous.bindHost !== next.bindHost ||
+  // Set inequality on kinds or addresses, not a difference in spelling.
+  !listenInterfacesEqual(previous.resolution.requested, next.resolution.requested) ||
   previous.localHttpUrl !== next.localHttpUrl;
 
 export const make = Effect.gen(function* () {
@@ -441,56 +330,59 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({ port });
       const settings = yield* desktopSettings.get;
       const currentNetworkInterfaces = yield* readNetworkInterfaces;
-      const resolved = resolveRuntimeState({
-        requestedMode: settings.serverExposureMode,
+      const next = makeRuntimeState({
+        requested: settings.listenInterfaces,
         settings,
         port,
         networkInterfaces: currentNetworkInterfaces,
         advertisedHostOverride: config.desktopLanHostOverride,
       });
-      yield* Ref.set(stateRef, resolved.state);
-      return toContractState(resolved.state);
+      yield* Ref.set(stateRef, next);
+      return toContractState(next);
     },
   );
 
-  const setMode = Effect.fn("desktop.serverExposure.setMode")(function* (
-    mode: DesktopServerExposureMode,
+  const setListenInterfaces = Effect.fn("desktop.serverExposure.setListenInterfaces")(function* (
+    requested: ListenInterfacesInput,
   ) {
-    yield* Effect.annotateCurrentSpan({ mode });
     const previous = yield* Ref.get(stateRef);
     const currentSettings = yield* desktopSettings.get;
-    const nextSettings = {
-      ...currentSettings,
-      serverExposureMode: mode,
-    };
     const currentNetworkInterfaces = yield* readNetworkInterfaces;
-    const resolved = resolveRuntimeState({
-      requestedMode: mode,
-      settings: nextSettings,
+    const next = makeRuntimeState({
+      requested,
+      settings: currentSettings,
       port: previous.port,
       networkInterfaces: currentNetworkInterfaces,
       advertisedHostOverride: config.desktopLanHostOverride,
     });
+    yield* Effect.annotateCurrentSpan({ listenSelection: next.resolution.listenSelection });
 
-    if (resolved.unavailable) {
+    if (next.resolution.unavailable) {
       return yield* new DesktopServerExposureNoNetworkAddressError({ port: previous.port });
     }
 
-    const change = yield* desktopSettings.setServerExposureMode(mode).pipe(
+    const change = yield* desktopSettings.setListenInterfaces(next.resolution.requested).pipe(
       Effect.mapError(
         (cause) =>
           new DesktopServerExposureModePersistenceError({
-            mode,
+            mode: next.resolution.mode,
             cause,
           }),
       ),
     );
 
-    yield* Ref.set(stateRef, resolved.state);
+    yield* Ref.set(stateRef, next);
     return {
-      state: toContractState(resolved.state),
-      requiresRelaunch: change.changed || requiresBackendRelaunch(previous, resolved.state),
+      state: toContractState(next),
+      requiresRelaunch: change.changed || requiresBackendRelaunch(previous, next),
     };
+  });
+
+  const setMode = Effect.fn("desktop.serverExposure.setMode")(function* (
+    mode: DesktopServerExposureMode,
+  ) {
+    yield* Effect.annotateCurrentSpan({ mode });
+    return yield* setListenInterfaces(listenInterfacesForLegacyExposureMode(mode));
   });
 
   const setTailscaleServeEnabled = Effect.fn("desktop.serverExposure.setTailscaleServeEnabled")(
@@ -533,14 +425,15 @@ export const make = Effect.gen(function* () {
     const currentNetworkInterfaces = yield* readNetworkInterfaces;
     const coreEndpoints = resolveDesktopCoreAdvertisedEndpoints({
       port: state.port,
-      exposure: toResolvedExposure(state),
+      localHttpUrl: state.localHttpUrl,
+      advertisedHosts: state.resolution.advertisedHosts,
       customHttpsEndpointUrls: config.desktopHttpsEndpointUrls,
     });
 
-    // Don't spawn the Tailscale CLI when the user hasn't opted into any
-    // network exposure. The spawn itself triggers a macOS "Other apps"
-    // TCC prompt on Mac App Store Tailscale builds.
-    if (state.mode !== "network-accessible" && !state.tailscaleServeEnabled) {
+    // Tailnet endpoints and Tailscale Serve exist only once a tailnet address
+    // has resolved. Skipping the spawn also avoids the macOS "Other apps" TCC
+    // prompt that Mac App Store Tailscale builds raise on every invocation.
+    if (!state.resolution.tailnetResolved) {
       return coreEndpoints;
     }
 
@@ -561,6 +454,7 @@ export const make = Effect.gen(function* () {
     getState,
     backendConfig,
     configureFromSettings,
+    setListenInterfaces,
     setMode,
     setTailscaleServeEnabled,
     getAdvertisedEndpoints,

@@ -10,6 +10,11 @@ const serverExposureState: DesktopServerExposureState = {
   advertisedHost: "192.168.1.10",
   endpointUrl: "http://192.168.1.10:37737",
   mode: "network-accessible",
+  listenInterfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
+  preset: "lan",
+  resolvedAddresses: ["127.0.0.1", "192.168.1.10"],
+  warnings: ["tailnet selected but no Tailscale address was found"],
+  tailscaleServeAvailable: true,
   tailscaleServeEnabled: false,
   tailscaleServePort: 443,
 };
@@ -46,6 +51,22 @@ describe("desktopNetworkAccessState", () => {
     );
     expect(getServerExposureState).toHaveBeenCalledTimes(1);
     expect(getAdvertisedEndpoints).toHaveBeenCalledTimes(1);
+
+    // The selection, its preset, and the resolver's output reach consumers.
+    const snapshot = AsyncResult.value(registry.get(atom));
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        _tag: "Some",
+        value: expect.objectContaining({
+          serverExposureState: expect.objectContaining({
+            listenInterfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
+            preset: "lan",
+            resolvedAddresses: ["127.0.0.1", "192.168.1.10"],
+            warnings: ["tailnet selected but no Tailscale address was found"],
+          }),
+        }),
+      }),
+    );
 
     remount();
     registry.dispose();
