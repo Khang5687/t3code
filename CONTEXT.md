@@ -73,3 +73,17 @@ _Avoid_: daemon, helper, background service
 **Routed instance**:
 A Claude provider instance that opts into sending API traffic through the pxpipe sidecar.
 _Avoid_: proxied instance, wrapped instance
+
+**Sidecar status**:
+The one answer the environment gives about a sidecar process: disabled, stopped, starting, healthy,
+unhealthy, or failed. Every client reads the same one.
+_Avoid_: health, state, sidecar health
+
+**Adopted sidecar**:
+A sidecar process the user started themselves, found answering on the configured port. T3 Code uses
+it, never supervises it, and never kills it.
+_Avoid_: external sidecar, foreign process, pre-existing sidecar
+
+**Version cache**:
+The T3-owned directory holding a pinned sidecar release, installed once and reused offline.
+_Avoid_: install cache, package cache
