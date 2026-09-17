@@ -78,7 +78,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
-import { pxpipeRoutingTrouble, readRouteThroughPxpipe } from "./PxpipeSidecarSettings.logic";
+import { pxpipeRoutingActive, pxpipeRoutingTrouble } from "./PxpipeSidecarSettings.logic";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
@@ -776,10 +776,16 @@ export function EnvironmentProviderSettings({
   // to this page while something on it is routed. With nothing routed the atom
   // is never subscribed and its poll never starts; with one or more routed
   // instances every card reads the same environment-keyed atom, so there is one
-  // poll for the page, shared with Settings → Sidecars → pxpipe.
+  // poll for the page, shared with Settings → Sidecars → pxpipe. An instance
+  // that sets its own `ANTHROPIC_BASE_URL` does not count as routed: its turns
+  // never reach the sidecar, so the sidecar's health says nothing about it.
   const routedInstanceIds = new Set(
     rows
-      .filter((row) => row.driver === "claudeAgent" && readRouteThroughPxpipe(row.instance.config))
+      .filter(
+        (row) =>
+          row.driver === "claudeAgent" &&
+          pxpipeRoutingActive(row.instance.config, row.instance.environment),
+      )
       .map((row) => row.instanceId),
   );
   const pxpipeState = useEnvironmentQuery(

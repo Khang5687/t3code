@@ -80,6 +80,10 @@ export interface PxpipeRoutingTrouble {
  * counts as trouble, so a healthy, adopted or still-starting sidecar draws no
  * dot and the dot always means "this instance's turns fail right now". An
  * unrouted instance never draws one, whatever the sidecar is doing.
+ *
+ * `routed` must come from `pxpipeRoutingActive`, not from the switch alone: an
+ * instance whose own `ANTHROPIC_BASE_URL` wins never reaches the sidecar, so a
+ * dot there would contradict the card's own "Routing inactive" row.
  */
 export function pxpipeRoutingTrouble(
   routed: boolean,
@@ -116,11 +120,27 @@ export function pxpipeRoutingOverride(
   environment: ReadonlyArray<SidecarEnvironmentVariable> | undefined,
 ): string | null {
   if (!routed) return null;
-  const overrides =
-    environment?.some((variable) => variable.name === "ANTHROPIC_BASE_URL") ?? false;
-  return overrides
+  return setsOwnAnthropicBaseUrl(environment)
     ? "Routing is inactive: this instance sets ANTHROPIC_BASE_URL itself, and that value wins. Remove it under Environment to route through the sidecar."
     : null;
+}
+
+const setsOwnAnthropicBaseUrl = (
+  environment: ReadonlyArray<SidecarEnvironmentVariable> | undefined,
+): boolean => environment?.some((variable) => variable.name === "ANTHROPIC_BASE_URL") ?? false;
+
+/**
+ * Whether an instance's turns actually reach the sidecar: the switch is on and
+ * nothing overrides where it points. `applyPxpipeRouting` on the server leaves a
+ * hand-set `ANTHROPIC_BASE_URL` alone (ADR 0004), so the switch by itself does
+ * not mean routed, and anything that speaks about the sidecar on behalf of an
+ * instance — the trouble dot, the state poll — has to ask this instead.
+ */
+export function pxpipeRoutingActive(
+  config: unknown,
+  environment: ReadonlyArray<SidecarEnvironmentVariable> | undefined,
+): boolean {
+  return readRouteThroughPxpipe(config) && !setsOwnAnthropicBaseUrl(environment);
 }
 
 /** Phases with a process behind them, so Stop has something to stop. */
@@ -182,6 +202,16 @@ export function publishableSidecarEnvironment(
   return published;
 }
 
+/**
+ * A name the user has committed that is not a variable name, so the row it is
+ * on is holding the whole list back. The field says so through `aria-invalid`,
+ * because the alternative is a list that silently stops saving.
+ */
+export function isInvalidSidecarEnvironmentName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed.length > 0 && !ENVIRONMENT_VARIABLE_NAME_PATTERN.test(trimmed);
+}
+
 export interface PxpipeRenderCacheView {
   readonly entries: number | null;
   readonly bytes: number | null;
@@ -230,4 +260,28 @@ export function readPxpipeStats(stats: PxpipeProxyStats | null): PxpipeStatsView
           }
         : null,
   };
+}
+
+/**
+ * What the stats card says under its figures. pxpipe answers `/proxy-stats` for
+ * whoever started it, so the page can hold real figures while the supervisor
+ * reports the sidecar as down — a proxy the user runs themselves on the
+ * configured port, or one the supervisor has given up on. A routed turn still
+ * fails in that state, because the preflight wants `healthy`, so the figures
+ * must not read as "routing works".
+ */
+export function describePxpipeStatsNote(
+  state: PxpipeSidecarState | null,
+  stats: PxpipeStatsView | null,
+): string | null {
+  if (stats === null) return "Nothing is answering on the proxy port yet.";
+  if (state !== null) {
+    const { tone } = describePxpipeStatus(state);
+    if (tone !== "good" && tone !== "pending") {
+      return "Something is answering on this port that T3 Code is not supervising, so these figures are not the sidecar's. Routed turns keep failing until the sidecar itself is running.";
+    }
+  }
+  return stats.compressionEnabled === false
+    ? "Compression is off, so pxpipe is passing requests through."
+    : null;
 }

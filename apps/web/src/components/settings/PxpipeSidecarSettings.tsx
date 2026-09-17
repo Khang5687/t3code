@@ -29,8 +29,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   canRemovePxpipeCache,
   canStopPxpipe,
+  describePxpipeStatsNote,
   describePxpipeStatus,
   formatModelAllowlist,
+  isInvalidSidecarEnvironmentName,
   parseModelAllowlist,
   publishableSidecarEnvironment,
   pxpipeBaseUrl,
@@ -126,6 +128,8 @@ function SidecarEnvironmentEditor({
       ),
     );
 
+  const hasInvalidName = rows.some((row) => isInvalidSidecarEnvironmentName(row.name));
+
   return (
     <div className="mt-3 min-w-0 space-y-2 pb-2">
       {rows.map((variable, index) => (
@@ -137,6 +141,7 @@ function SidecarEnvironmentEditor({
             onCommit={(name) => update(variable.id, { name: name.trim() })}
             placeholder="VARIABLE_NAME"
             spellCheck={false}
+            aria-invalid={isInvalidSidecarEnvironmentName(variable.name) || undefined}
             aria-label={`Sidecar environment variable name ${index + 1}`}
           />
           <span className="text-xs text-muted-foreground" aria-hidden>
@@ -204,8 +209,17 @@ function SidecarEnvironmentEditor({
       ))}
       <div className="flex min-h-[1.875rem] flex-wrap items-center justify-end gap-x-3 gap-y-1">
         {rows.length > 0 ? (
-          <span className="mr-auto text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app.
+          // One unusable name holds every row back, so the hint has to say that
+          // before it says anything else.
+          <span
+            className={cn(
+              "mr-auto text-xs",
+              hasInvalidName ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {hasInvalidName
+              ? "A name must start with a letter or underscore and use only letters, digits and underscores. Nothing here is saved until every name is usable."
+              : "Sensitive values are stored separately and never returned to the app."}
           </span>
         ) : null}
         <Button
@@ -234,8 +248,9 @@ function SidecarEnvironmentEditor({
  * remote browser sees the machine doing the work.
  *
  * The supervisor broadcasts nothing, so status polls while the page is mounted
- * (`serverEnvironment.sidecarPxpipeState`) and stats only refresh on mount and
- * on the refresh control. Nothing on the page animates.
+ * (`serverEnvironment.sidecarPxpipeState`). The stats have no timer: they come
+ * from pxpipe's own endpoint on demand, and they ride the polled status so the
+ * figures never outlive the proxy that produced them. Nothing here animates.
  */
 export function PxpipeSidecarSettings() {
   const environmentId = usePrimaryEnvironmentId();
@@ -268,10 +283,21 @@ export function PxpipeSidecarSettings() {
   const status = describePxpipeStatus(state);
   const stats = readPxpipeStats(statsQuery.data);
   const refreshState = stateQuery.refresh;
+  const refreshStats = statsQuery.refresh;
+  // A start that has just returned has not bound its port yet, so refreshing
+  // the figures at the click reads an empty card. Read them when the poll says
+  // something is answering instead. Losing the sidecar the other way needs no
+  // refresh: `describePxpipeStatsNote` disowns figures the sidecar no longer
+  // stands behind.
+  const isAnswering = status.tone === "good";
+  useEffect(() => {
+    if (isAnswering) refreshStats();
+  }, [isAnswering, refreshStats]);
 
-  const run = async (
-    action: () => Promise<AtomCommandResult<unknown, unknown>>,
+  const run = async <A,>(
+    action: () => Promise<AtomCommandResult<A, unknown>>,
     failureTitle: string,
+    onSuccess?: (value: A) => void,
   ): Promise<void> => {
     setIsBusy(true);
     try {
@@ -280,6 +306,7 @@ export function PxpipeSidecarSettings() {
         if (isAtomCommandInterrupted(result)) return;
         throw squashAtomCommandFailure(result);
       }
+      onSuccess?.(result.value);
     } catch (cause) {
       toastManager.add({
         type: "error",
@@ -289,6 +316,10 @@ export function PxpipeSidecarSettings() {
     } finally {
       setIsBusy(false);
       refreshState();
+      // Starting or stopping the process decides whether anything answers
+      // `/proxy-stats`, so the figures below go with it rather than sitting
+      // there describing a proxy that just went away.
+      refreshStats();
     }
   };
 
@@ -479,7 +510,7 @@ export function PxpipeSidecarSettings() {
       <SettingsSection
         id="sidecar-pxpipe-stats"
         title="Savings"
-        description="What pxpipe reports about itself, read from the proxy when this page opens."
+        description="What pxpipe reports about itself, read from the proxy when this page opens, whenever the sidecar starts or stops, and when you ask."
         headerAction={
           <Button
             size="icon-xs"
@@ -494,13 +525,7 @@ export function PxpipeSidecarSettings() {
       >
         <SettingsRow
           title="Proxy stats"
-          description={
-            stats === null
-              ? "Nothing is answering on the proxy port yet."
-              : stats.compressionEnabled === false
-                ? "Compression is off, so pxpipe is passing requests through."
-                : undefined
-          }
+          description={describePxpipeStatsNote(state, stats) ?? undefined}
           status={
             statsQuery.error ? (
               <span className="block text-destructive">{statsQuery.error}</span>
@@ -567,6 +592,16 @@ export function PxpipeSidecarSettings() {
                 void run(
                   () => removeCache({ environmentId, input: {} }),
                   "Could not remove the pxpipe cache",
+                  // Deleting directories the page cannot list has to report
+                  // what it deleted, or the click reads as a no-op either way.
+                  ({ removedVersions }) =>
+                    toastManager.add({
+                      type: "success",
+                      title:
+                        removedVersions.length === 0
+                          ? "No cached pxpipe installs to remove"
+                          : `Removed cached pxpipe ${removedVersions.join(", ")}`,
+                    }),
                 );
               }}
             >

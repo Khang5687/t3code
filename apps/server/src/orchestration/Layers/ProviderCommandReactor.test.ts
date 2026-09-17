@@ -38,7 +38,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -4024,6 +4024,16 @@ describe("ProviderCommandReactor", () => {
     };
     const now = "2026-01-01T00:00:00.000Z";
 
+    // These cases are about the switch, so the machine running them must not
+    // already carry the variable that makes every instance unroutable. A
+    // developer who routes their own Claude through pxpipe exports it.
+    beforeEach(() => {
+      vi.stubEnv("ANTHROPIC_BASE_URL", undefined);
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     const startTurn = (harness: Awaited<ReturnType<typeof createHarness>>, messageId: string) =>
       harness.runEffect(
         harness.engine.dispatch({
@@ -4125,9 +4135,45 @@ describe("ProviderCommandReactor", () => {
       expect(
         ["claudeAgent", "claude_unrouted", "claude_routed", "codex_routed", "codex"].map(
           (instanceId) =>
-            instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make(instanceId)),
+            instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make(instanceId), {}),
         ),
       ).toEqual([true, false, true, false, false]);
+    });
+
+    // `applyPxpipeRouting` leaves a hand-set base URL alone, so these turns were
+    // never going to the sidecar and its health must not stop them.
+    it("does not route an instance whose own base URL wins", () => {
+      const settings = decodeServerSettings({
+        providerInstances: {
+          claude_openrouter: {
+            driver: "claudeAgent",
+            config: { routeThroughPxpipe: true },
+            environment: [
+              { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+            ],
+          },
+        },
+      });
+
+      expect(
+        instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make("claude_openrouter"), {}),
+      ).toBe(false);
+    });
+
+    it("does not route when the server process already carries a base URL", () => {
+      const settings = decodeServerSettings({
+        providers: { claudeAgent: { routeThroughPxpipe: true } },
+        providerInstances: {
+          claude_routed: { driver: "claudeAgent", config: { routeThroughPxpipe: true } },
+        },
+      });
+      const inherited = { ANTHROPIC_BASE_URL: "https://api.internal" };
+
+      expect(
+        ["claudeAgent", "claude_routed"].map((instanceId) =>
+          instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make(instanceId), inherited),
+        ),
+      ).toEqual([false, false]);
     });
   });
 });
