@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { DEFAULT_PXPIPE_SIDECAR_PORT } from "./sidecar.ts";
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
@@ -615,6 +616,72 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
     expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
+  });
+});
+
+describe("ServerSettings sidecars", () => {
+  it("decodes a settings file written before sidecars existed", () => {
+    expect(decodeServerSettings({}).sidecars.pxpipe).toEqual({
+      enabled: false,
+      port: DEFAULT_PXPIPE_SIDECAR_PORT,
+      models: [],
+      logPath: "",
+      binaryPath: "",
+      anthropicUpstream: "",
+      extraEnv: [],
+    });
+  });
+
+  it("round-trips a configured sidecar through encode", () => {
+    const settings = decodeServerSettings({
+      sidecars: {
+        pxpipe: { enabled: true, port: 47822, anthropicUpstream: "  http://localhost:8080  " },
+      },
+    });
+    expect(settings.sidecars.pxpipe.anthropicUpstream).toBe("http://localhost:8080");
+    expect(encodeServerSettings(settings).sidecars?.pxpipe?.port).toBe(47822);
+  });
+
+  it("checks the port at the patch boundary, not on a later read", () => {
+    expect(
+      decodeServerSettingsPatch({ sidecars: { pxpipe: { port: 3000 } } }).sidecars?.pxpipe,
+    ).toEqual({ port: 3000 });
+    for (const port of [0, 65536, 1.5]) {
+      expect(() => decodeServerSettingsPatch({ sidecars: { pxpipe: { port } } })).toThrow();
+    }
+  });
+
+  it("accepts an empty path or upstream, which is how a client clears one", () => {
+    expect(
+      decodeServerSettingsPatch({
+        sidecars: { pxpipe: { logPath: "", binaryPath: "", anthropicUpstream: "" } },
+      }).sidecars?.pxpipe,
+    ).toEqual({ logPath: "", binaryPath: "", anthropicUpstream: "" });
+  });
+});
+
+describe("ClaudeSettings pxpipe routing", () => {
+  it("leaves every existing instance unrouted", () => {
+    expect(decodeClaudeSettings({}).routeThroughPxpipe).toBe(false);
+    expect(decodeServerSettings({}).providers.claudeAgent.routeThroughPxpipe).toBe(false);
+  });
+
+  it("is opted into per instance", () => {
+    expect(decodeClaudeSettings({ routeThroughPxpipe: true }).routeThroughPxpipe).toBe(true);
+    expect(
+      decodeServerSettingsPatch({ providers: { claudeAgent: { routeThroughPxpipe: true } } })
+        .providers?.claudeAgent?.routeThroughPxpipe,
+    ).toBe(true);
+  });
+
+  it("stays a Claude-only setting", () => {
+    const providers = decodeServerSettings({}).providers;
+    for (const [driver, settings] of Object.entries(providers)) {
+      expect([driver, "routeThroughPxpipe" in settings]).toEqual([
+        driver,
+        driver === "claudeAgent",
+      ]);
+    }
   });
 });
 

@@ -58,16 +58,23 @@ describe("ProviderSettingsForm helpers", () => {
     expect(fields.find((field) => field.key === "apiKey")?.control).toBe("password");
   });
 
-  it("shows the auto-compaction threshold for Claude providers", () => {
+  it("shows the auto-compaction threshold and pxpipe routing for Claude providers", () => {
     const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
     expect(claude).toBeDefined();
 
-    expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
+    const fields = deriveProviderSettingsFields(claude!);
+    expect(fields.map((field) => field.key)).toEqual([
       "binaryPath",
       "homePath",
       "autoCompactWindow",
       "launchArgs",
+      "routeThroughPxpipe",
     ]);
+    // Annotation-driven: routing needs no bespoke form code.
+    expect(fields.find((field) => field.key === "routeThroughPxpipe")).toMatchObject({
+      control: "switch",
+      defaultBooleanValue: false,
+    });
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {
