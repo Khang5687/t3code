@@ -127,6 +127,13 @@ export const PxpipeSidecarState = Schema.Struct({
   /** The pinned version this environment runs, empty before the first install. */
   version: TrimmedString,
   pid: Schema.NullOr(PositiveInt),
+  /**
+   * A pxpipe the user started themselves, found answering on the configured
+   * port. It is used, never supervised, and never killed, so it reports no
+   * pid and no version. Defaulted so a state written before adoption existed
+   * still decodes.
+   */
+  adopted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Supervised restarts since the sidecar was last healthy. */
   restartCount: NonNegativeInt,
   /** Why the last start or health check failed; null while healthy. */
@@ -144,3 +151,16 @@ export type PxpipeSidecarState = typeof PxpipeSidecarState.Type;
  */
 export const PxpipeProxyStats = Schema.Record(Schema.String, Schema.Unknown);
 export type PxpipeProxyStats = typeof PxpipeProxyStats.Type;
+
+/**
+ * A sidecar operation the server refused or could not finish — removing a
+ * cached version while the process is running, or a cache that would not
+ * delete. It carries a sentence the page can show as-is, because the reason is
+ * the whole point of the failure.
+ */
+export class SidecarOperationError extends Schema.TaggedErrorClass<SidecarOperationError>()(
+  "SidecarOperationError",
+  {
+    message: Schema.String,
+  },
+) {}
