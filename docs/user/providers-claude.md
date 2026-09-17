@@ -95,3 +95,9 @@ config directory and put the router's endpoint and credential variables in that
 instance's **Environment variables**. The router must run where the environment
 can reach it. Follow the [Claude Code Router instructions](https://github.com/musistudio/claude-code-router)
 for its installation and routing configuration.
+
+## Cut input tokens with pxpipe
+
+An instance can send its Anthropic traffic through a local pxpipe proxy, which
+compresses each request. See [pxpipe sidecar](./pxpipe-sidecar.md) for what to
+turn on and what a routed instance gives up.
