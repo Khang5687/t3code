@@ -41,6 +41,7 @@ import * as ThreadPlanProgress from "../orchestration/ThreadPlanProgress.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactor } from "../orchestration/Services/ProviderCommandReactor.ts";
+import * as PxpipeSidecar from "../sidecar/PxpipeSidecar.ts";
 import { ProviderSessionDirectoryLive } from "../provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../provider/Layers/ProviderService.ts";
 import {
@@ -931,6 +932,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
           Layer.provide(Layer.mock(TextGeneration)({})),
           Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(PxpipeSidecar.layerTest),
         );
 
         yield* engine.dispatch({
