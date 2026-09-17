@@ -9,8 +9,12 @@ import {
   parseModelAllowlist,
   publishableSidecarEnvironment,
   pxpipeBaseUrl,
+  pxpipeRoutingTrouble,
   readPxpipeStats,
+  readRouteThroughPxpipe,
 } from "./PxpipeSidecarSettings.logic";
+
+const EVERY_STATUS = ["disabled", "stopped", "starting", "healthy", "unhealthy", "failed"] as const;
 
 const state = (overrides: Partial<PxpipeSidecarState> = {}): PxpipeSidecarState => ({
   status: "healthy",
@@ -25,9 +29,7 @@ const state = (overrides: Partial<PxpipeSidecarState> = {}): PxpipeSidecarState 
 
 describe("describePxpipeStatus", () => {
   it("names every status the supervisor reports", () => {
-    const labels = (
-      ["disabled", "stopped", "starting", "healthy", "unhealthy", "failed"] as const
-    ).map((status) => describePxpipeStatus(state({ status })).label);
+    const labels = EVERY_STATUS.map((status) => describePxpipeStatus(state({ status })).label);
     expect(labels).toEqual(["Off", "Stopped", "Starting", "Running", "Unhealthy", "Failed"]);
   });
 
@@ -163,5 +165,51 @@ describe("readPxpipeStats", () => {
 
   it("has nothing to render when the proxy answered nothing", () => {
     expect(readPxpipeStats(null)).toBeNull();
+  });
+});
+
+describe("pxpipeRoutingTrouble", () => {
+  it("draws no dot on an unrouted instance, whatever the sidecar is doing", () => {
+    for (const status of EVERY_STATUS) {
+      expect([status, pxpipeRoutingTrouble(false, state({ status }))]).toEqual([status, null]);
+    }
+    expect(pxpipeRoutingTrouble(false, state({ adopted: true, pid: null }))).toBeNull();
+  });
+
+  it("maps every status to a dot for a routed instance", () => {
+    const keys = EVERY_STATUS.map(
+      (status) => pxpipeRoutingTrouble(true, state({ status }))?.statusKey ?? null,
+    );
+    expect(keys).toEqual(["warning", "warning", null, null, "warning", "error"]);
+  });
+
+  it("stays quiet for a sidecar the user started themselves", () => {
+    expect(pxpipeRoutingTrouble(true, state({ adopted: true, pid: null, version: "" }))).toBeNull();
+    // Even one whose last supervised status was a failure: an adopted sidecar is
+    // answering now, which is the only thing a routed turn needs.
+    expect(
+      pxpipeRoutingTrouble(true, state({ adopted: true, status: "failed", pid: null })),
+    ).toBeNull();
+  });
+
+  it("draws nothing before the first state arrives, rather than a lie", () => {
+    expect(pxpipeRoutingTrouble(true, null)).toBeNull();
+  });
+
+  it("explains the trouble and where to fix it", () => {
+    expect(pxpipeRoutingTrouble(true, state({ status: "disabled" }))?.detail).toBe(
+      "Routed through pxpipe, which is off. Check Settings → Sidecars → pxpipe.",
+    );
+  });
+});
+
+describe("readRouteThroughPxpipe", () => {
+  it("routes only on an explicit true in the instance config blob", () => {
+    expect(readRouteThroughPxpipe({ routeThroughPxpipe: true })).toBe(true);
+    expect(readRouteThroughPxpipe({ routeThroughPxpipe: false })).toBe(false);
+    expect(readRouteThroughPxpipe({ routeThroughPxpipe: "true" })).toBe(false);
+    expect(readRouteThroughPxpipe({ binaryPath: "/usr/local/bin/claude" })).toBe(false);
+    expect(readRouteThroughPxpipe(null)).toBe(false);
+    expect(readRouteThroughPxpipe(undefined)).toBe(false);
   });
 });
