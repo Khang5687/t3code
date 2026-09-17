@@ -40,6 +40,7 @@ import {
   usePrimaryEnvironmentId,
   type EnvironmentPresentation,
 } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useEnvironmentSessionState } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -77,6 +78,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { pxpipeRoutingTrouble, readRouteThroughPxpipe } from "./PxpipeSidecarSettings.logic";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
@@ -770,6 +772,22 @@ export function EnvironmentProviderSettings({
     }
   }
 
+  // Fork-only (ADR 0004). Routing is per instance, so the sidecar only matters
+  // to this page while something on it is routed. With nothing routed the atom
+  // is never subscribed and its poll never starts; with one or more routed
+  // instances every card reads the same environment-keyed atom, so there is one
+  // poll for the page, shared with Settings → Sidecars → pxpipe.
+  const routedInstanceIds = new Set(
+    rows
+      .filter((row) => row.driver === "claudeAgent" && readRouteThroughPxpipe(row.instance.config))
+      .map((row) => row.instanceId),
+  );
+  const pxpipeState = useEnvironmentQuery(
+    routedInstanceIds.size === 0
+      ? null
+      : serverEnvironment.sidecarPxpipeState({ environmentId, input: {} }),
+  ).data;
+
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
     selectedInstanceId === targetInstanceId &&
@@ -897,6 +915,7 @@ export function EnvironmentProviderSettings({
         liveProvider={liveProvider}
         mode={mode}
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
+        pxpipeTrouble={pxpipeRoutingTrouble(routedInstanceIds.has(row.instanceId), pxpipeState)}
         onSelect={mode === "list" ? () => setSelectedInstanceId(row.instanceId) : undefined}
         readOnly={readOnly}
         setup={

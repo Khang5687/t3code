@@ -46,6 +46,7 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
+import type { PxpipeRoutingTrouble } from "./PxpipeSidecarSettings.logic";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import {
@@ -376,6 +377,12 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
+  /**
+   * Fork-only (ADR 0004). Set by the caller only for an instance routed through
+   * the pxpipe sidecar, and only while that sidecar will not serve its turns.
+   * `null` on every other card, so the dot means one thing.
+   */
+  readonly pxpipeTrouble?: PxpipeRoutingTrouble | null | undefined;
 }
 
 /**
@@ -418,6 +425,7 @@ export function ProviderInstanceCard({
   onModelOrderChange,
   onRunUpdate,
   isUpdating = false,
+  pxpipeTrouble = null,
 }: ProviderInstanceCardProps) {
   const enabled = resolveProviderInstanceEnabled(instance);
   // A locally disabled provider reads "Disabled" with a muted dot even if its
@@ -566,6 +574,26 @@ export function ProviderInstanceCard({
     statusKey === "warning" || statusKey === "error" ? (
       <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} aria-hidden />
     ) : null;
+  // A second dot, for the sidecar rather than the provider. It carries its own
+  // explanation because the row's text is about the provider, and it is static
+  // for the same reason the status dot is.
+  const pxpipeDotNode = pxpipeTrouble ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label={pxpipeTrouble.detail}
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              PROVIDER_STATUS_STYLES[pxpipeTrouble.statusKey].dot,
+            )}
+          />
+        }
+      />
+      <TooltipPopup side="top">{pxpipeTrouble.detail}</TooltipPopup>
+    </Tooltip>
+  ) : null;
   // Trouble states carry the server's explanation (a failed probe, a shadow
   // home entry that is not a symlink, a missing binary). Show it wherever the
   // headline shows so the user can act without opening the editor.
@@ -574,6 +602,7 @@ export function ProviderInstanceCard({
     isAuthenticated && authEmail ? (
       <>
         {needsAttention ? statusDotNode : null}
+        {pxpipeDotNode}
         <span>Authenticated as</span>
         <ProviderAuthEmail email={authEmail} />
         {authLabel ? <span>· {authLabel}</span> : null}
@@ -584,6 +613,7 @@ export function ProviderInstanceCard({
     ) : (
       <>
         {statusDotNode}
+        {pxpipeDotNode}
         <span>{summary.headline}</span>
         {summary.detail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {summary.detail}</span>
@@ -655,8 +685,11 @@ export function ProviderInstanceCard({
               ) : null}
             </span>
             <span className="mt-0.5 flex items-start gap-1.5 text-[13px] leading-[1.45] text-muted-foreground/80">
-              {statusDotNode ? (
-                <span className="flex h-[1.45em] shrink-0 items-center">{statusDotNode}</span>
+              {statusDotNode || pxpipeDotNode ? (
+                <span className="flex h-[1.45em] shrink-0 items-center gap-1">
+                  {statusDotNode}
+                  {pxpipeDotNode}
+                </span>
               ) : null}
               <span className="line-clamp-2 [overflow-wrap:anywhere]">
                 {summary.headline}

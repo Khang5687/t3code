@@ -10,6 +10,7 @@ export type SettingsPath =
   | "/settings/integrations"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/sidecars"
   | "/settings/archived";
 
 export interface SettingsSearchItem {
@@ -56,6 +57,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
+  "/settings/sidecars": "Sidecars",
   "/settings/archived": "Archive",
 };
 
@@ -523,6 +525,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
     searchTerms: [
       "automatic machine environment resources cpu memory capacity preference weight shared projects",
+    ],
+  },
+  {
+    id: "sidecar-pxpipe",
+    title: "pxpipe proxy",
+    to: "/settings/sidecars",
+    searchTerms: [
+      "pxpipe proxy anthropic base url token savings sidecar compression cache claude route",
     ],
   },
   {

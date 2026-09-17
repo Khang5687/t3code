@@ -19,6 +19,7 @@ import {
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
+  PlugZapIcon,
   SearchIcon,
   Settings2Icon,
   XIcon,
@@ -79,6 +80,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/integrations": BlocksIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,
+  "/settings/sidecars": PlugZapIcon,
   "/settings/archived": ArchiveIcon,
 };
 
@@ -117,6 +119,11 @@ const SETTINGS_PAGE_SECTIONS: Partial<
   "/settings/connections": [
     { label: "This environment", targetId: "connections-environment" },
     { label: "Remote environments", targetId: "remote-environments" },
+  ],
+  "/settings/sidecars": [
+    { label: "pxpipe proxy", targetId: "sidecar-pxpipe" },
+    { label: "Savings", targetId: "sidecar-pxpipe-stats" },
+    { label: "Cached install", targetId: "sidecar-pxpipe-cache" },
   ],
 };
 
