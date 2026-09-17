@@ -46,7 +46,11 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
-import type { PxpipeRoutingTrouble } from "./PxpipeSidecarSettings.logic";
+import {
+  pxpipeRoutingOverride,
+  type PxpipeRoutingTrouble,
+  readRouteThroughPxpipe,
+} from "./PxpipeSidecarSettings.logic";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import {
@@ -428,6 +432,13 @@ export function ProviderInstanceCard({
   pxpipeTrouble = null,
 }: ProviderInstanceCardProps) {
   const enabled = resolveProviderInstanceEnabled(instance);
+  // Fork-only (ADR 0004). A property of the routing mechanism rather than of
+  // the sidecar's state, so it is read from this instance's own config and
+  // environment instead of arriving as a prop.
+  const pxpipeRoutingNote = pxpipeRoutingOverride(
+    readRouteThroughPxpipe(instance.config),
+    instance.environment,
+  );
   // A locally disabled provider reads "Disabled" with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.
   const statusKey: ProviderStatusKey = enabled
@@ -885,13 +896,18 @@ export function ProviderInstanceCard({
         className={readOnly ? "opacity-50 select-none" : undefined}
       >
         {driverOption ? (
-          <ProviderSettingsForm
-            definition={driverOption}
-            value={instance.config}
-            idPrefix={`provider-instance-${instanceId}`}
-            variant="settings"
-            onChange={updateConfig}
-          />
+          <>
+            <ProviderSettingsForm
+              definition={driverOption}
+              value={instance.config}
+              idPrefix={`provider-instance-${instanceId}`}
+              variant="settings"
+              onChange={updateConfig}
+            />
+            {pxpipeRoutingNote ? (
+              <SettingsRow title="Routing inactive" description={pxpipeRoutingNote} />
+            ) : null}
+          </>
         ) : (
           <SettingsRow
             title="Driver"

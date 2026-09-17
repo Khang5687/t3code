@@ -105,6 +105,24 @@ export function readRouteThroughPxpipe(config: unknown): boolean {
   return (config as Record<string, unknown>).routeThroughPxpipe === true;
 }
 
+/**
+ * Why routing is inactive on an instance that has the switch on, or null when
+ * it is doing what it says. T3 Code never overrides a hand-set
+ * `ANTHROPIC_BASE_URL` (ADR 0004), so the card has to say so — otherwise the
+ * switch reads as on while every turn goes somewhere else.
+ */
+export function pxpipeRoutingOverride(
+  routed: boolean,
+  environment: ReadonlyArray<SidecarEnvironmentVariable> | undefined,
+): string | null {
+  if (!routed) return null;
+  const overrides =
+    environment?.some((variable) => variable.name === "ANTHROPIC_BASE_URL") ?? false;
+  return overrides
+    ? "Routing is inactive: this instance sets ANTHROPIC_BASE_URL itself, and that value wins. Remove it under Environment to route through the sidecar."
+    : null;
+}
+
 /** Phases with a process behind them, so Stop has something to stop. */
 export function canStopPxpipe(state: PxpipeSidecarState | null): boolean {
   if (state === null || state.adopted) return false;

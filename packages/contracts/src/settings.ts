@@ -567,7 +567,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Route through pxpipe",
         description:
-          "Send this instance's Anthropic API traffic through the pxpipe sidecar. Configure and start the sidecar in Settings → Sidecars → pxpipe.",
+          "Send this instance's Anthropic API traffic through the pxpipe sidecar by setting ANTHROPIC_BASE_URL, which turns off Claude Code's first-party client features for this instance: /remote-control and claude.ai connectors stop working. Configure and start the sidecar in Settings → Sidecars → pxpipe.",
         providerSettingsForm: { control: "switch" },
       }),
     ),

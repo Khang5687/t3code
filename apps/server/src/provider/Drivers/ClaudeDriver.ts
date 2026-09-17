@@ -12,7 +12,11 @@
  *
  * @module provider/Drivers/ClaudeDriver
  */
-import { ClaudeSettings, ProviderDriverKind } from "@t3tools/contracts";
+import {
+  ClaudeSettings,
+  DEFAULT_PXPIPE_SIDECAR_PORT,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
@@ -46,7 +50,10 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import {
+  applyPxpipeRouting,
+  mergeProviderInstanceEnvironment,
+} from "../ProviderInstanceEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -115,7 +122,24 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const eventLoggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
       const modelCatalog = modelManifest.current.pipe(Effect.map(resolveClaudeModelCatalog));
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // Fork-only (ADR 0004). One environment for every Claude path this
+      // instance owns — SDK sessions, text generation, and the status and
+      // capabilities probes all spawn with `processEnv` — so routing cannot
+      // reach one and miss another. The port is read once per instance build;
+      // changing it in Settings → Sidecars → pxpipe takes effect for live
+      // instances when they next rebuild.
+      const pxpipePort = config.routeThroughPxpipe
+        ? yield* serverSettings.getSettings.pipe(
+            Effect.map((settings) => settings.sidecars.pxpipe.port),
+            // Settings this build cannot read still produced this instance;
+            // pxpipe's own default port is the only answer left.
+            Effect.catchCause(() => Effect.succeed(DEFAULT_PXPIPE_SIDECAR_PORT)),
+          )
+        : null;
+      const processEnv = applyPxpipeRouting(
+        mergeProviderInstanceEnvironment(environment),
+        pxpipePort,
+      );
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
