@@ -4,6 +4,7 @@ import {
 } from "@t3tools/shared/advertisedEndpoint";
 import {
   DesktopServerExposureModeSchema,
+  formatListenInterfaces,
   listenInterfacesEqual,
   listenInterfacesForLegacyExposureMode,
   type AdvertisedEndpoint,
@@ -359,7 +360,9 @@ export const make = Effect.gen(function* () {
       networkInterfaces: currentNetworkInterfaces,
       advertisedHostOverride: config.desktopLanHostOverride,
     });
-    yield* Effect.annotateCurrentSpan({ listenSelection: next.resolution.listenSelection });
+    yield* Effect.annotateCurrentSpan({
+      listenSelection: formatListenInterfaces(next.resolution.requested),
+    });
 
     if (next.resolution.unavailable) {
       return yield* new DesktopServerExposureNoNetworkAddressError({ port: previous.port });

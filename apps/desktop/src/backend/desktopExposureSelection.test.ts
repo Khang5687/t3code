@@ -1,4 +1,4 @@
-import { listenInterfacesForPreset } from "@t3tools/contracts";
+import { formatListenInterfaces, listenInterfacesForPreset } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { NetworkInterfaces } from "./DesktopNetworkInterfaces.ts";
@@ -80,15 +80,16 @@ describe("resolveDesktopExposure", () => {
     expect(resolution.advertisedHosts).toEqual([]);
     expect(resolution.warnings).toContain("listening on loopback only");
     // The request itself survives, so the envelope still asks for the tailnet.
-    expect(resolution.listenSelection).toBe("loopback,tailnet,lan");
+    expect(formatListenInterfaces(resolution.requested)).toBe("loopback,tailnet,lan");
   });
 
   it("never emits a resolved address or a wildcard as the listen host", () => {
     for (const preset of ["local-only", "tailscale-only", "lan"] as const) {
-      const { listenSelection } = resolveDesktopExposure({
+      const { requested } = resolveDesktopExposure({
         requested: listenInterfacesForPreset(preset),
         networkInterfaces: lanAndTailnet,
       });
+      const listenSelection = formatListenInterfaces(requested);
       expect(listenSelection).not.toContain("0.0.0.0");
       expect(listenSelection).not.toMatch(/\d+\.\d+\.\d+\.\d+/u);
     }
