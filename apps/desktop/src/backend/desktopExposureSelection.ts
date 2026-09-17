@@ -1,6 +1,5 @@
 import {
   exposurePresetOf,
-  formatListenInterfaces,
   legacyExposureModeOf,
   listenInterfacesForPreset,
   normalizeListenInterfaces,
@@ -23,13 +22,15 @@ const normalizeOptionalHost = (value: string | undefined): string | undefined =>
 };
 
 export interface DesktopExposureResolution {
-  /** The selection as asked for. This is what the bootstrap envelope carries. */
+  /**
+   * The selection as asked for. This is what the bootstrap envelope carries,
+   * spelled with `formatListenInterfaces`: never a resolved IP, never a
+   * wildcard (ADR 0003).
+   */
   readonly requested: ListenInterfaces;
   readonly preset: ExposurePreset;
   /** Derived from the *effective* selection, so a request that resolved to nothing reads local-only. */
   readonly mode: LegacyExposureMode;
-  /** `--host` spelling of `requested`; never a resolved IP and never a wildcard. */
-  readonly listenSelection: string;
   readonly resolvedAddresses: ReadonlyArray<string>;
   readonly warnings: ReadonlyArray<string>;
   /** Hosts the desktop-core endpoints advertise, in bind order. */
@@ -86,7 +87,6 @@ export const resolveDesktopExposure = (input: {
     requested,
     preset: exposurePresetOf(requested),
     mode: legacyExposureModeOf(effective),
-    listenSelection: formatListenInterfaces(requested),
     resolvedAddresses: resolved.addresses,
     warnings: resolved.warnings,
     advertisedHosts,
