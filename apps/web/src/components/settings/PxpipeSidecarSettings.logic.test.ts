@@ -9,6 +9,7 @@ import {
   parseModelAllowlist,
   publishableSidecarEnvironment,
   pxpipeBaseUrl,
+  pxpipeRoutingOverride,
   pxpipeRoutingTrouble,
   readPxpipeStats,
   readRouteThroughPxpipe,
@@ -200,6 +201,29 @@ describe("pxpipeRoutingTrouble", () => {
     expect(pxpipeRoutingTrouble(true, state({ status: "disabled" }))?.detail).toBe(
       "Routed through pxpipe, which is off. Check Settings → Sidecars → pxpipe.",
     );
+  });
+});
+
+describe("pxpipeRoutingOverride", () => {
+  it("says nothing on an unrouted instance, whatever it sets", () => {
+    expect(
+      pxpipeRoutingOverride(false, [
+        { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+      ]),
+    ).toBeNull();
+  });
+
+  it("says nothing on a routed instance that leaves the base URL alone", () => {
+    expect(pxpipeRoutingOverride(true, [])).toBeNull();
+    expect(pxpipeRoutingOverride(true, undefined)).toBeNull();
+  });
+
+  it("explains why a routed instance with its own base URL is not routed", () => {
+    expect(
+      pxpipeRoutingOverride(true, [
+        { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+      ]),
+    ).toContain("this instance sets ANTHROPIC_BASE_URL itself");
   });
 });
 

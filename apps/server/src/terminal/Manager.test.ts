@@ -2064,6 +2064,76 @@ it.layer(
     ),
   );
 
+  // Fork-only (ADR 0004). A terminal on a routed instance must reach the
+  // sidecar exactly as that instance's threads do.
+  it.effect.each([
+    {
+      name: "routes a routed instance at the configured port",
+      instanceId: "claude_routed",
+      baseEnv: {},
+      expected: "http://127.0.0.1:47999",
+    },
+    {
+      name: "leaves an unrouted instance direct",
+      instanceId: "claude_direct",
+      baseEnv: {},
+      expected: undefined,
+    },
+    {
+      name: "keeps a base URL the instance sets by hand",
+      instanceId: "claude_handset",
+      baseEnv: {},
+      expected: "https://openrouter.ai/api",
+    },
+    {
+      name: "keeps a base URL inherited from the server process",
+      instanceId: "claude_routed",
+      baseEnv: { ANTHROPIC_BASE_URL: "https://proxy.internal" },
+      expected: undefined,
+    },
+  ])("$name", ({ instanceId, baseEnv, expected }) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        serverSettings,
+        path,
+        rawProviderInstanceId: instanceId,
+        env: undefined,
+        baseEnv,
+      });
+
+      expect(environment.ANTHROPIC_BASE_URL).toBe(expected);
+    }).pipe(
+      Effect.provide(
+        ServerSettings.ServerSettingsService.layerTest({
+          sidecars: { pxpipe: { enabled: true, port: 47999 } },
+          providerInstances: {
+            [ProviderInstanceId.make("claude_routed")]: {
+              driver: "claudeAgent",
+              config: { routeThroughPxpipe: true },
+            },
+            [ProviderInstanceId.make("claude_direct")]: {
+              driver: "claudeAgent",
+              config: {},
+            },
+            [ProviderInstanceId.make("claude_handset")]: {
+              driver: "claudeAgent",
+              environment: [
+                {
+                  name: "ANTHROPIC_BASE_URL",
+                  value: "https://openrouter.ai/api",
+                  sensitive: false,
+                },
+              ],
+              config: { routeThroughPxpipe: true },
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
   it.effect("keeps unknown provider instance ids unavailable after legacy hydration", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

@@ -5,7 +5,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 
-import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
+import {
+  applyPxpipeRouting,
+  mergeProviderInstanceEnvironment,
+} from "./ProviderInstanceEnvironment.ts";
 
 describe("mergeProviderInstanceEnvironment", () => {
   it.effect.each([
@@ -64,5 +67,40 @@ describe("mergeProviderInstanceEnvironment", () => {
       ANTHROPIC_API_KEY: "",
       PATH: "/bin",
     });
+  });
+});
+
+describe("applyPxpipeRouting", () => {
+  it("leaves an unrouted instance untouched", () => {
+    const env = { PATH: "/bin" };
+
+    expect(applyPxpipeRouting(env, null)).toBe(env);
+  });
+
+  it("points a routed instance at the sidecar port", () => {
+    expect(applyPxpipeRouting({ PATH: "/bin" }, 47821)).toEqual({
+      PATH: "/bin",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:47821",
+    });
+  });
+
+  it("keeps a base URL the instance sets by hand", () => {
+    const env = { ANTHROPIC_BASE_URL: "https://openrouter.ai/api" };
+
+    expect(applyPxpipeRouting(env, 47821)).toBe(env);
+  });
+
+  it("keeps a base URL the child inherits from the server process", () => {
+    const env = { PATH: "/bin" };
+
+    expect(applyPxpipeRouting(env, 47821, { ANTHROPIC_BASE_URL: "https://proxy.internal" })).toBe(
+      env,
+    );
+  });
+
+  it("reads an empty hand-set value as set, because the child sees it either way", () => {
+    const env = { ANTHROPIC_BASE_URL: "" };
+
+    expect(applyPxpipeRouting(env, 47821)).toBe(env);
   });
 });
