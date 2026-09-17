@@ -4,10 +4,14 @@ import type {
   SidecarEnvironmentVariable,
 } from "@t3tools/contracts";
 
+import type { ProviderStatusKey } from "./providerStatus";
+
 /**
- * Fork-only (ADR 0004). Pure parts of Settings → Sidecars → pxpipe: what the
- * status reads as, which controls the current state allows, and how the proxy's
- * own stats body is narrowed.
+ * Fork-only (ADR 0004). Pure parts of the pxpipe UI: what the status reads as,
+ * which controls the current state allows, how the proxy's own stats body is
+ * narrowed, and what a routed provider instance shows when the sidecar is in
+ * trouble. Shared by Settings → Sidecars → pxpipe and the provider cards under
+ * Settings → Providers, which speak about the same sidecar.
  */
 
 export interface PxpipeStatusDisplay {
@@ -62,6 +66,43 @@ export function describePxpipeStatus(state: PxpipeSidecarState | null): PxpipeSt
     };
   }
   return STATUS_DISPLAY[state.status];
+}
+
+export interface PxpipeRoutingTrouble {
+  /** Reuses the provider card's dot palette, so one card speaks one language. */
+  readonly statusKey: ProviderStatusKey;
+  readonly detail: string;
+}
+
+/**
+ * The pxpipe dot on a provider instance card. Only a routed instance can be in
+ * trouble over the sidecar, and only a sidecar that will not serve its turns
+ * counts as trouble, so a healthy, adopted or still-starting sidecar draws no
+ * dot and the dot always means "this instance's turns fail right now". An
+ * unrouted instance never draws one, whatever the sidecar is doing.
+ */
+export function pxpipeRoutingTrouble(
+  routed: boolean,
+  state: PxpipeSidecarState | null,
+): PxpipeRoutingTrouble | null {
+  if (!routed || state === null) return null;
+  const status = describePxpipeStatus(state);
+  if (status.tone === "good" || status.tone === "pending") return null;
+  return {
+    statusKey: status.tone === "bad" ? "error" : "warning",
+    detail: `Routed through pxpipe, which is ${status.label.toLowerCase()}. Check Settings → Sidecars → pxpipe.`,
+  };
+}
+
+/**
+ * `routeThroughPxpipe` rides in an instance's opaque config blob, which only
+ * `ClaudeSettings` annotates. Read as a strict `true` so an instance saved
+ * before the field existed, or one belonging to a driver that never had it,
+ * reads as unrouted.
+ */
+export function readRouteThroughPxpipe(config: unknown): boolean {
+  if (config === null || typeof config !== "object") return false;
+  return (config as Record<string, unknown>).routeThroughPxpipe === true;
 }
 
 /** Phases with a process behind them, so Stop has something to stop. */
