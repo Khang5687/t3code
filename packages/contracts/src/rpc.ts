@@ -216,7 +216,7 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { PxpipeProxyStats, PxpipeSidecarState } from "./sidecar.ts";
+import { PxpipeProxyStats, PxpipeSidecarState, SidecarOperationError } from "./sidecar.ts";
 import {
   ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditResult,
@@ -591,27 +591,24 @@ const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates
 });
 
 /**
- * The pxpipe sidecar surface. Declared here so settings, the sidecar page and
- * the instance card share one contract; the supervisor that answers them lands
- * with the sidecar itself and joins them to `WsRpcGroup` then. An RPC in the
- * group without a handler is a server type error, so they stay out of it until
- * there is something to serve.
+ * The pxpipe sidecar surface, shared by settings, the sidecar page and the
+ * instance card. The supervisor in `apps/server/src/sidecar` answers all four.
  */
-export const WsSidecarPxpipeGetStateRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetState, {
+const WsSidecarPxpipeGetStateRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetState, {
   payload: Schema.Struct({}),
   success: PxpipeSidecarState,
   error: EnvironmentAuthorizationError,
 });
 
 /** Start or stop the process without changing whether the sidecar is enabled. */
-export const WsSidecarPxpipeSetRunningRpc = Rpc.make(WS_METHODS.sidecarPxpipeSetRunning, {
+const WsSidecarPxpipeSetRunningRpc = Rpc.make(WS_METHODS.sidecarPxpipeSetRunning, {
   payload: Schema.Struct({ running: Schema.Boolean }),
   success: PxpipeSidecarState,
   error: EnvironmentAuthorizationError,
 });
 
 /** pxpipe's own `GET /proxy-stats`, or null when nothing is answering it. */
-export const WsSidecarPxpipeGetStatsRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetStats, {
+const WsSidecarPxpipeGetStatsRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetStats, {
   payload: Schema.Struct({}),
   success: Schema.NullOr(PxpipeProxyStats),
   error: EnvironmentAuthorizationError,
@@ -621,10 +618,12 @@ export const WsSidecarPxpipeGetStatsRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetSt
  * Drop cached pxpipe installs so the next start reinstalls. Omitting `version`
  * removes every cached version.
  */
-export const WsSidecarPxpipeRemoveCacheRpc = Rpc.make(WS_METHODS.sidecarPxpipeRemoveCache, {
+const WsSidecarPxpipeRemoveCacheRpc = Rpc.make(WS_METHODS.sidecarPxpipeRemoveCache, {
   payload: Schema.Struct({ version: Schema.optionalKey(TrimmedNonEmptyString) }),
   success: Schema.Struct({ removedVersions: Schema.Array(TrimmedNonEmptyString) }),
-  error: EnvironmentAuthorizationError,
+  // Refusing to remove a running sidecar's install, and a cache that will not
+  // delete, both need a sentence on the wire rather than an empty result.
+  error: Schema.Union([SidecarOperationError, EnvironmentAuthorizationError]),
 });
 
 const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
@@ -1256,6 +1255,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsSidecarPxpipeGetStateRpc,
+  WsSidecarPxpipeSetRunningRpc,
+  WsSidecarPxpipeGetStatsRpc,
+  WsSidecarPxpipeRemoveCacheRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
