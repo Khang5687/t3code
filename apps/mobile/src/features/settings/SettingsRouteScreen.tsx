@@ -547,6 +547,9 @@ function GeneralSettingsSection() {
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <AutoSettleSettingsRows />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
+      {/* Fork-only (ADR 0004). Read-only sidecar status plus the per-instance
+          routing switch; the sidecar's own controls stay on web and desktop. */}
+      <SettingsRow icon="arrow.triangle.swap" label="pxpipe" target="SettingsSidecars" />
     </SettingsSection>
   );
 }
