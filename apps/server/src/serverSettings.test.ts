@@ -239,6 +239,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         customModels: ["claude-custom"],
         launchArgs: "",
         autoCompactWindow: "",
+        routeThroughPxpipe: false,
       });
       assert.deepEqual(
         next.textGenerationModelSelection,
@@ -948,6 +949,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         customModels: [],
         launchArgs: "",
         autoCompactWindow: "",
+        routeThroughPxpipe: false,
       });
       assert.deepEqual(next.providers.opencode, {
         // OpenCode is disabled by default; this update only touches paths.
@@ -1244,6 +1246,96 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.equal(
         roundTripped.providerInstances[instanceId]?.environment?.[0]?.value,
         "sk-or-secret",
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("stores sensitive sidecar extraEnv values outside settings.json", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const next = yield* serverSettings.updateSettings({
+        sidecars: {
+          pxpipe: {
+            enabled: true,
+            logPath: "~/pxpipe.log",
+            extraEnv: [
+              { name: "HOST", value: "127.0.0.1", sensitive: false },
+              { name: "PXPIPE_TOKEN", value: "tok-first", sensitive: true },
+            ],
+          },
+        },
+      });
+
+      assert.deepEqual(next.sidecars.pxpipe.extraEnv, [
+        { name: "HOST", value: "127.0.0.1", sensitive: false },
+        { name: "PXPIPE_TOKEN", value: "tok-first", sensitive: true, valueRedacted: true },
+      ]);
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "tok-first");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(raw).sidecars.pxpipe.extraEnv[1], {
+        name: "PXPIPE_TOKEN",
+        value: "",
+        sensitive: true,
+        valueRedacted: true,
+      });
+
+      // Sending the marker back keeps the stored value; sending a new one replaces it.
+      const kept = yield* serverSettings.updateSettings({
+        sidecars: {
+          pxpipe: {
+            extraEnv: [{ name: "PXPIPE_TOKEN", value: "", sensitive: true, valueRedacted: true }],
+          },
+        },
+      });
+      assert.equal(kept.sidecars.pxpipe.extraEnv[0]?.value, "tok-first");
+
+      const replaced = yield* serverSettings.updateSettings({
+        sidecars: {
+          pxpipe: {
+            extraEnv: [{ name: "PXPIPE_TOKEN", value: "tok-second", sensitive: true }],
+          },
+        },
+      });
+      assert.equal(replaced.sidecars.pxpipe.extraEnv[0]?.value, "tok-second");
+      assert.notInclude(yield* fileSystem.readFileString(serverConfig.settingsPath), "tok-second");
+
+      // A redacted value never reaches a client, even materialized in memory.
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(replaced);
+      assert.deepEqual(redacted.sidecars.pxpipe.extraEnv, [
+        { name: "PXPIPE_TOKEN", value: "", sensitive: true, valueRedacted: true },
+      ]);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("clears a sidecar path back to empty through a patch", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      yield* serverSettings.updateSettings({
+        sidecars: {
+          pxpipe: {
+            logPath: "~/pxpipe.log",
+            binaryPath: "/opt/pxpipe",
+            anthropicUpstream: "http://localhost:8080",
+          },
+        },
+      });
+      const cleared = yield* serverSettings.updateSettings({
+        sidecars: { pxpipe: { logPath: "", binaryPath: "", anthropicUpstream: "" } },
+      });
+
+      assert.deepEqual(
+        [
+          cleared.sidecars.pxpipe.logPath,
+          cleared.sidecars.pxpipe.binaryPath,
+          cleared.sidecars.pxpipe.anthropicUpstream,
+        ],
+        ["", "", ""],
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );

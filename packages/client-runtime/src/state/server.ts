@@ -1118,5 +1118,39 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    // Fork-only (ADR 0004). The sidecar supervisor broadcasts nothing, so the
+    // sidecar page polls. The short idle TTL is what stops the poll: the atom
+    // is dropped once nothing is reading it, a few seconds after unmount.
+    sidecarPxpipeState: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:sidecar:pxpipe-state",
+      tag: WS_METHODS.sidecarPxpipeGetState,
+      staleTimeMs: 2_000,
+      refreshIntervalMs: 5_000,
+      idleTtlMs: 5_000,
+    }),
+    // Stats come from pxpipe's own HTTP endpoint on every call, so they refresh
+    // on mount and when the user asks, never on a timer.
+    sidecarPxpipeStats: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:sidecar:pxpipe-stats",
+      tag: WS_METHODS.sidecarPxpipeGetStats,
+      staleTimeMs: 10_000,
+      idleTtlMs: 5_000,
+    }),
+    setSidecarPxpipeRunning: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sidecar:pxpipe-set-running",
+      tag: WS_METHODS.sidecarPxpipeSetRunning,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
+    }),
+    removeSidecarPxpipeCache: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sidecar:pxpipe-remove-cache",
+      tag: WS_METHODS.sidecarPxpipeRemoveCache,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
+    }),
   };
 }

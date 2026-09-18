@@ -150,6 +150,7 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as PxpipeSidecar from "./sidecar/PxpipeSidecar.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -663,6 +664,7 @@ const makeWsRpcLayer = (
       const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
+      const pxpipeSidecar = yield* PxpipeSidecar.PxpipeSidecar;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -2610,6 +2612,24 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.sidecarPxpipeGetState]: (_input) =>
+          observeRpcEffect(WS_METHODS.sidecarPxpipeGetState, pxpipeSidecar.state, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.sidecarPxpipeSetRunning]: ({ running }) =>
+          observeRpcEffect(WS_METHODS.sidecarPxpipeSetRunning, pxpipeSidecar.setRunning(running), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.sidecarPxpipeGetStats]: (_input) =>
+          observeRpcEffect(WS_METHODS.sidecarPxpipeGetStats, pxpipeSidecar.stats, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.sidecarPxpipeRemoveCache]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sidecarPxpipeRemoveCache,
+            pxpipeSidecar.removeCache(input.version),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);

@@ -1,13 +1,17 @@
 import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import {
   type ChatAttachment,
+  ClaudeSettings,
   CommandId,
+  defaultInstanceIdForDriver,
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
+  type ProviderInstanceId,
   type ProjectId,
   type OrchestrationSession,
+  type ServerSettings,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -42,6 +46,7 @@ import {
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
+import { ANTHROPIC_BASE_URL } from "../../provider/ProviderInstanceEnvironment.ts";
 import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
@@ -64,6 +69,7 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { PxpipeSidecar } from "../../sidecar/PxpipeSidecar.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
@@ -207,6 +213,52 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
 }
 
+const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
+const decodeClaudeSettingsOption = Schema.decodeUnknownOption(ClaudeSettings);
+
+/** Summary of the activity a routed turn gets when the sidecar is down. */
+export const PXPIPE_UNHEALTHY_TURN_START_SUMMARY = "pxpipe proxy is not running";
+
+/**
+ * Whether turns on this instance actually reach the pxpipe sidecar (ADR 0004),
+ * which is what decides whether an unhealthy sidecar may stop them.
+ *
+ * Mirrors the hydration rule: an explicit `providerInstances` entry wins,
+ * otherwise the legacy `providers.claudeAgent` mirror answers for the default
+ * instance id. Reading settings here keeps the driver registry out of the
+ * reactor for one boolean.
+ *
+ * The switch alone is not the answer. `applyPxpipeRouting` leaves a hand-set
+ * `ANTHROPIC_BASE_URL` alone — from the instance's own environment or
+ * inherited by the server process — so such an instance never talks to the
+ * sidecar, and blocking its turns over the sidecar's health would fail a turn
+ * that was never going there. This is the same rule the instance card states as
+ * "Routing inactive".
+ */
+export function instanceRoutesThroughPxpipe(
+  settings: ServerSettings,
+  instanceId: ProviderInstanceId,
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const entry = settings.providerInstances[instanceId];
+  if (entry !== undefined) {
+    if (entry.driver !== CLAUDE_DRIVER_KIND) return false;
+    if (entry.environment?.some((variable) => variable.name === ANTHROPIC_BASE_URL)) return false;
+    if (inheritedEnv[ANTHROPIC_BASE_URL] !== undefined) return false;
+    return Option.match(decodeClaudeSettingsOption(entry.config ?? {}), {
+      // A config this build cannot decode has no live instance to send to, so
+      // the turn fails on its own further down.
+      onNone: () => false,
+      onSome: (claude) => claude.routeThroughPxpipe,
+    });
+  }
+  return (
+    instanceId === defaultInstanceIdForDriver(CLAUDE_DRIVER_KIND) &&
+    settings.providers.claudeAgent.routeThroughPxpipe &&
+    inheritedEnv[ANTHROPIC_BASE_URL] === undefined
+  );
+}
+
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -220,6 +272,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const pxpipeSidecar = yield* PxpipeSidecar;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -1195,6 +1248,28 @@ const make = Effect.gen(function* () {
     processThreadTitleRegenerationSafely,
   );
 
+  /**
+   * Why a turn on this instance cannot start, or null when it can. A user who
+   * turned routing on did it for billing or routing reasons, so a sidecar that
+   * is not healthy stops the turn rather than letting it reach the direct
+   * upstream behind their back.
+   */
+  const pxpipePreflightDetail = Effect.fnUntraced(function* (instanceId: ProviderInstanceId) {
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor could not read settings for pxpipe preflight", {
+          instanceId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (settings === null || !instanceRoutesThroughPxpipe(settings, instanceId)) return null;
+    const sidecar = yield* pxpipeSidecar.state;
+    if (sidecar.status === "healthy") return null;
+    const reason = sidecar.lastError === null ? "" : ` Last error: ${sidecar.lastError}`;
+    return `Provider instance '${instanceId}' routes through the pxpipe sidecar, and the sidecar is ${sidecar.status}.${reason} Start it in Settings → Sidecars → pxpipe.`;
+  });
+
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
     receivedEvent: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
@@ -1320,6 +1395,16 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(true))));
     if (authCommandHandled) {
       return;
+    }
+
+    // Ahead of the worktree and the session so a blocked turn touches nothing,
+    // and ahead of the `/compact` branch so a compaction cannot slip past the
+    // sidecar either. Resolves the same instance `ensureSessionForThread` does.
+    const pxpipeBlocked = yield* pxpipePreflightDetail(
+      event.payload.modelSelection?.instanceId ?? thread.modelSelection.instanceId,
+    );
+    if (pxpipeBlocked !== null) {
+      return yield* appendTurnStartFailure(PXPIPE_UNHEALTHY_TURN_START_SUMMARY, pxpipeBlocked);
     }
 
     yield* ensureThreadWorktree(thread);

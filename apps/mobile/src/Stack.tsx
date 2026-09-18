@@ -74,6 +74,7 @@ import {
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
 import { SettingsProjectOverviewRouteScreen } from "./features/settings/SettingsProjectOverviewRouteScreen";
 import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
+import { SettingsSidecarsRouteScreen } from "./features/settings/SettingsSidecarsRouteScreen";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
@@ -259,6 +260,13 @@ const SettingsContentStack = createNativeStackNavigator({
       linking: "keyboard",
       options: {
         title: "Keyboard",
+      },
+    }),
+    SettingsSidecars: createNativeStackScreen({
+      screen: SettingsSidecarsRouteScreen,
+      linking: "sidecars",
+      options: {
+        title: "pxpipe",
       },
     }),
     SettingsClientStorage: createNativeStackScreen({

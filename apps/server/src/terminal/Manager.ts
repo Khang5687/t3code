@@ -59,7 +59,10 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ServerConfig from "../config.ts";
-import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import {
+  applyPxpipeRouting,
+  mergeProviderInstanceEnvironment,
+} from "../provider/ProviderInstanceEnvironment.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
@@ -1352,6 +1355,12 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
   readonly env: Record<string, string> | undefined;
+  /**
+   * What the PTY inherits underneath these variables. Only read to spot an
+   * `ANTHROPIC_BASE_URL` the user already set, which pxpipe routing never
+   * overrides.
+   */
+  readonly baseEnv?: NodeJS.ProcessEnv;
 }) {
   const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
   const settings = yield* input.serverSettings.getSettings.pipe(
@@ -1377,6 +1386,14 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
     if (Option.isSome(config)) {
       resolved = yield* makeClaudeEnvironment(config.value, resolved).pipe(
         Effect.provideService(Path.Path, input.path),
+      );
+      // Fork-only (ADR 0004). A `claude` launched from a terminal on a routed
+      // instance reaches the sidecar the same way its threads do; the shared
+      // rule keeps the two from drifting.
+      resolved = applyPxpipeRouting(
+        resolved,
+        config.value.routeThroughPxpipe ? settings.sidecars.pxpipe.port : null,
+        input.baseEnv ?? process.env,
       );
     }
   }

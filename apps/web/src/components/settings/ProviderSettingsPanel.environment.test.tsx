@@ -63,9 +63,17 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 
-vi.mock("@effect/atom-react", () => ({
-  useAtomValue: () => atoms.providers,
-}));
+// The panel reads two atoms: the provider snapshot, and the pxpipe sidecar
+// state query (ADR 0004), which `useEnvironmentQuery` subscribes and refreshes
+// on every render even when it is handed no atom.
+vi.mock("@effect/atom-react", async () => {
+  const { AsyncResult } = await import("effect/unstable/reactivity");
+  return {
+    useAtomValue: (atom: unknown) =>
+      atom === atoms.providersAtom ? atoms.providers : AsyncResult.initial(false),
+    useAtomRefresh: () => () => {},
+  };
+});
 
 vi.mock("../../state/server", () => ({
   EMPTY_SERVER_PROVIDERS: [],

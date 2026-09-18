@@ -20,6 +20,7 @@ import {
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
+  PlugZapIcon,
   SearchIcon,
   Settings2Icon,
   XIcon,
@@ -86,6 +87,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
   "/settings/connections": Link2Icon,
+  "/settings/sidecars": PlugZapIcon,
   "/settings/archived": ArchiveIcon,
 };
 

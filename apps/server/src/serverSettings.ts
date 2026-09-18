@@ -140,6 +140,18 @@ function providerEnvironmentSecretName(input: {
 }
 
 /**
+ * Sidecar `extraEnv` secrets live in the same store as provider environment
+ * secrets, under their own prefix so a sidecar and a provider instance sharing
+ * a name cannot collide.
+ */
+function sidecarEnvironmentSecretName(input: {
+  readonly sidecar: string;
+  readonly name: string;
+}): string {
+  return `sidecar-env-${Buffer.from(input.sidecar, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
+}
+
+/**
  * On disk the hub key is replaced by this marker and the real value lives in
  * the secret store, mirroring provider environment secrets. A client that
  * sends the marker back means "keep what you have".
@@ -186,7 +198,14 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       },
     ]),
   );
-  return { ...settings, providerInstances, usageLimitSources };
+  const sidecars = {
+    ...settings.sidecars,
+    pxpipe: {
+      ...settings.sidecars.pxpipe,
+      extraEnv: settings.sidecars.pxpipe.extraEnv.map(redactProviderEnvironmentVariable),
+    },
+  };
+  return { ...settings, providerInstances, usageLimitSources, sidecars };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -709,10 +728,39 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
+      const sidecarExtraEnv: ProviderInstanceEnvironmentVariable[] = [];
+      for (const variable of settings.sidecars.pxpipe.extraEnv) {
+        if (!variable.sensitive || !variable.valueRedacted) {
+          sidecarExtraEnv.push(variable);
+          continue;
+        }
+        const secret = yield* secretStore
+          .get(sidecarEnvironmentSecretName({ sidecar: "pxpipe", name: variable.name }))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "read-secret",
+                  environmentVariable: variable.name,
+                  cause,
+                }),
+            ),
+          );
+        sidecarExtraEnv.push({
+          ...variable,
+          value: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+        });
+      }
+
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        sidecars: {
+          ...settings.sidecars,
+          pxpipe: { ...settings.sidecars.pxpipe, extraEnv: sidecarExtraEnv },
+        },
       };
     });
 
@@ -881,10 +929,67 @@ const make = Effect.gen(function* () {
           );
       }
 
+      const sidecarExtraEnv: ProviderInstanceEnvironmentVariable[] = [];
+      const nextSidecarSecretKeys = new Set<string>();
+      for (const variable of next.sidecars.pxpipe.extraEnv) {
+        const secretName = sidecarEnvironmentSecretName({ sidecar: "pxpipe", name: variable.name });
+        const failWith = (operation: "write-secret" | "remove-secret") => (cause: unknown) =>
+          new ServerSettingsError({
+            settingsPath,
+            operation,
+            environmentVariable: variable.name,
+            cause,
+          });
+
+        if (!variable.sensitive) {
+          yield* secretStore.remove(secretName).pipe(Effect.mapError(failWith("remove-secret")));
+          sidecarExtraEnv.push(redactProviderEnvironmentVariable(variable));
+          continue;
+        }
+
+        nextSidecarSecretKeys.add(secretName);
+        if (variable.valueRedacted) {
+          // The client sent the marker back: keep what the store already has.
+          sidecarExtraEnv.push(redactProviderEnvironmentVariable(variable));
+          continue;
+        }
+        if (variable.value.length > 0) {
+          yield* secretStore
+            .set(secretName, textEncoder.encode(variable.value))
+            .pipe(Effect.mapError(failWith("write-secret")));
+          sidecarExtraEnv.push({ ...variable, value: "", valueRedacted: true });
+          continue;
+        }
+        yield* secretStore.remove(secretName).pipe(Effect.mapError(failWith("remove-secret")));
+        const { valueRedacted: _omit, ...rest } = variable;
+        sidecarExtraEnv.push(rest);
+      }
+
+      for (const variable of current.sidecars.pxpipe.extraEnv) {
+        if (!variable.sensitive) continue;
+        const secretName = sidecarEnvironmentSecretName({ sidecar: "pxpipe", name: variable.name });
+        if (nextSidecarSecretKeys.has(secretName)) continue;
+        yield* secretStore.remove(secretName).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "remove-stale-secret",
+                environmentVariable: variable.name,
+                cause,
+              }),
+          ),
+        );
+      }
+
       return {
         ...next,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        sidecars: {
+          ...next.sidecars,
+          pxpipe: { ...next.sidecars.pxpipe, extraEnv: sidecarExtraEnv },
+        },
       };
     });
 

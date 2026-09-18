@@ -38,6 +38,7 @@ import {
   ProviderInstanceId,
   type ProviderDriverKind,
 } from "./providerInstance.ts";
+import { PxpipeSidecarPort, PxpipeSidecarSettings, SidecarEnvironmentVariable } from "./sidecar.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -669,9 +670,20 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    // Per-instance, not global: an environment mixes routed and unrouted
+    // instances (ADR 0004).
+    routeThroughPxpipe: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Route through pxpipe",
+        description:
+          "Send this instance's Anthropic API traffic through the pxpipe sidecar by setting ANTHROPIC_BASE_URL, which turns off Claude Code's first-party client features for this instance: /remote-control and claude.ai connectors stop working. Configure and start the sidecar in Settings → Sidecars → pxpipe.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs"],
+    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs", "routeThroughPxpipe"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1045,6 +1057,10 @@ export const StorageCleanupSettings = Schema.Struct({
   logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
+export const SidecarsSettings = Schema.Struct({
+  pxpipe: PxpipeSidecarSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type SidecarsSettings = typeof SidecarsSettings.Type;
 
 export const ServerSettings = Schema.Struct({
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1227,6 +1243,9 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // Nested under a sidecar name so a second sidecar is a new key, not a
+  // migration of a flat block.
+  sidecars: SidecarsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1358,6 +1377,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   autoCompactWindow: Schema.optionalKey(
     TrimmedString.check(Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN)),
   ),
+  routeThroughPxpipe: Schema.optionalKey(Schema.Boolean),
 });
 
 const CursorSettingsPatch = Schema.Struct({
@@ -1389,6 +1409,19 @@ const OpenCodeSettingsPatch = Schema.Struct({
   serverUrl: Schema.optionalKey(TrimmedString),
   serverPassword: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+// Every field optional and independently clearable: writing "" to a path or
+// upstream restores pxpipe's own default. The port is checked here so a bad
+// value fails the update that introduced it.
+const PxpipeSidecarSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  port: Schema.optionalKey(PxpipeSidecarPort),
+  models: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  logPath: Schema.optionalKey(TrimmedString),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  anthropicUpstream: Schema.optionalKey(TrimmedString),
+  extraEnv: Schema.optionalKey(Schema.Array(SidecarEnvironmentVariable)),
 });
 
 export const ServerSettingsPatch = Schema.Struct({
@@ -1477,6 +1510,11 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
+  sidecars: Schema.optionalKey(
+    Schema.Struct({
+      pxpipe: Schema.optionalKey(PxpipeSidecarSettingsPatch),
+    }),
+  ),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

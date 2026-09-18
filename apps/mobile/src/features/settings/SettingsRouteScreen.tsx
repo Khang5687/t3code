@@ -181,6 +181,14 @@ function SettingsIndexSections() {
           target="SettingsEnvironmentMaintenance"
           disabled={noServerTargets}
         />
+        {/* Fork-only (ADR 0004). Read-only sidecar status plus the per-instance
+            routing switch; the sidecar's own controls stay on web and desktop. */}
+        <SettingsRow
+          icon="arrow.triangle.swap"
+          label="pxpipe"
+          target="SettingsSidecars"
+          disabled={noServerTargets}
+        />
       </SettingsSection>
 
       <SettingsSection title="App">

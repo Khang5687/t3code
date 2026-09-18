@@ -22,6 +22,7 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
+  | "/settings/sidecars"
   | "/settings/archived";
 
 /**
@@ -91,6 +92,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
+  "/settings/sidecars": "Sidecars",
   "/settings/archived": "Archive",
 };
 
@@ -782,6 +784,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "sidecar-pxpipe",
+    title: "pxpipe proxy",
+    to: "/settings/sidecars",
+    searchTerms: [
+      "pxpipe proxy anthropic base url token savings sidecar compression cache claude route",
+    ],
+  },
+  {
     id: "github-routing",
     title: "GitHub sharing",
     to: "/settings/connections",
@@ -812,6 +822,8 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  // Fork-only (ADR 0004): the sidecar page renders at any selection.
+  "/settings/sidecars": null,
   "/settings/archived": "project-defaults",
 };
 

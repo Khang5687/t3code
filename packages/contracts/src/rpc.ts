@@ -244,6 +244,7 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
+import { PxpipeProxyStats, PxpipeSidecarState, SidecarOperationError } from "./sidecar.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -381,6 +382,12 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  // pxpipe sidecar (fork-only, ADR 0004)
+  sidecarPxpipeGetState: "sidecar.pxpipe.getState",
+  sidecarPxpipeSetRunning: "sidecar.pxpipe.setRunning",
+  sidecarPxpipeGetStats: "sidecar.pxpipe.getStats",
+  sidecarPxpipeRemoveCache: "sidecar.pxpipe.removeCache",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -641,6 +648,42 @@ const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates
   payload: Schema.Struct({}),
   success: UsagePricing,
   error: EnvironmentAuthorizationError,
+});
+
+/**
+ * The pxpipe sidecar surface, shared by settings, the sidecar page and the
+ * instance card. The supervisor in `apps/server/src/sidecar` answers all four.
+ */
+const WsSidecarPxpipeGetStateRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetState, {
+  payload: Schema.Struct({}),
+  success: PxpipeSidecarState,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Start or stop the process without changing whether the sidecar is enabled. */
+const WsSidecarPxpipeSetRunningRpc = Rpc.make(WS_METHODS.sidecarPxpipeSetRunning, {
+  payload: Schema.Struct({ running: Schema.Boolean }),
+  success: PxpipeSidecarState,
+  error: EnvironmentAuthorizationError,
+});
+
+/** pxpipe's own `GET /proxy-stats`, or null when nothing is answering it. */
+const WsSidecarPxpipeGetStatsRpc = Rpc.make(WS_METHODS.sidecarPxpipeGetStats, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(PxpipeProxyStats),
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * Drop cached pxpipe installs so the next start reinstalls. Omitting `version`
+ * removes every cached version.
+ */
+const WsSidecarPxpipeRemoveCacheRpc = Rpc.make(WS_METHODS.sidecarPxpipeRemoveCache, {
+  payload: Schema.Struct({ version: Schema.optionalKey(TrimmedNonEmptyString) }),
+  success: Schema.Struct({ removedVersions: Schema.Array(TrimmedNonEmptyString) }),
+  // Refusing to remove a running sidecar's install, and a cache that will not
+  // delete, both need a sentence on the wire rather than an empty result.
+  error: Schema.Union([SidecarOperationError, EnvironmentAuthorizationError]),
 });
 
 const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
@@ -1405,6 +1448,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsSidecarPxpipeGetStateRpc,
+  WsSidecarPxpipeSetRunningRpc,
+  WsSidecarPxpipeGetStatsRpc,
+  WsSidecarPxpipeRemoveCacheRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

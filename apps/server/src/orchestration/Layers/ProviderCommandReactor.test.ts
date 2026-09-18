@@ -10,6 +10,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type PxpipeSidecarState,
+  ServerSettings,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -33,10 +35,11 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -62,9 +65,12 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  instanceRoutesThroughPxpipe,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
+  PXPIPE_UNHEALTHY_TURN_START_SUMMARY,
 } from "./ProviderCommandReactor.ts";
+import { PxpipeSidecar } from "../../sidecar/PxpipeSidecar.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -74,6 +80,26 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+
+const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
+
+const makePxpipeSidecarLayer = (status: PxpipeSidecarState["status"]) => {
+  const state: PxpipeSidecarState = {
+    status,
+    port: 47821,
+    version: "0.13.2",
+    pid: null,
+    adopted: false,
+    restartCount: 0,
+    lastError: status === "unhealthy" ? "pxpipe stopped answering on port 47821." : null,
+  };
+  return Layer.succeed(PxpipeSidecar, {
+    state: Effect.succeed(state),
+    setRunning: () => Effect.succeed(state),
+    stats: Effect.succeed(null),
+    removeCache: () => Effect.succeed({ removedVersions: [] }),
+  });
+};
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -187,6 +213,8 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
+    readonly routeClaudeThroughPxpipe?: boolean;
+    readonly pxpipeSidecarStatus?: PxpipeSidecarState["status"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -490,7 +518,14 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest(
+          input?.routeClaudeThroughPxpipe === true
+            ? { providers: { claudeAgent: { routeThroughPxpipe: true } } }
+            : {},
+        ),
+      ),
+      Layer.provideMerge(makePxpipeSidecarLayer(input?.pxpipeSidecarStatus ?? "healthy")),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -4338,4 +4373,164 @@ describe("ProviderCommandReactor", () => {
       expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     }),
   );
+
+  describe("pxpipe routing preflight", () => {
+    const claudeSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-4-6",
+    };
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // These cases are about the switch, so the machine running them must not
+    // already carry the variable that makes every instance unroutable. A
+    // developer who routes their own Claude through pxpipe exports it.
+    beforeEach(() => {
+      vi.stubEnv("ANTHROPIC_BASE_URL", undefined);
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const startTurn = (harness: Awaited<ReturnType<typeof createHarness>>, messageId: string) =>
+      harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-turn-start-${messageId}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(messageId),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+    it("fails a routed turn before the session starts when the sidecar is unhealthy", async () => {
+      const harness = await createHarness({
+        threadModelSelection: claudeSelection,
+        routeClaudeThroughPxpipe: true,
+        pxpipeSidecarStatus: "unhealthy",
+      });
+
+      await startTurn(harness, "user-message-routed-unhealthy");
+      await harness.drain();
+      await waitFor(async () => {
+        const snapshot = await harness.readModel();
+        return (
+          snapshot.threads
+            .find((entry) => entry.id === ThreadId.make("thread-1"))
+            ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+        );
+      });
+
+      expect(harness.startSession.mock.calls.length).toBe(0);
+      expect(harness.sendTurn.mock.calls.length).toBe(0);
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toMatchObject({
+        tone: "error",
+        summary: PXPIPE_UNHEALTHY_TURN_START_SUMMARY,
+        payload: {
+          detail:
+            "Provider instance 'claudeAgent' routes through the pxpipe sidecar, and the sidecar is unhealthy. Last error: pxpipe stopped answering on port 47821. Start it in Settings → Sidecars → pxpipe.",
+        },
+      });
+    });
+
+    it("sends a turn on an unrouted instance while the sidecar is unhealthy", async () => {
+      const harness = await createHarness({
+        threadModelSelection: claudeSelection,
+        pxpipeSidecarStatus: "unhealthy",
+      });
+
+      await startTurn(harness, "user-message-unrouted-unhealthy");
+      await harness.drain();
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toBe(false);
+    });
+
+    it("sends a routed turn once the sidecar reports healthy", async () => {
+      const harness = await createHarness({
+        threadModelSelection: claudeSelection,
+        routeClaudeThroughPxpipe: true,
+        pxpipeSidecarStatus: "healthy",
+      });
+
+      await startTurn(harness, "user-message-routed-healthy");
+      await harness.drain();
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toBe(false);
+    });
+
+    it("resolves the routing flag per instance", () => {
+      const settings = decodeServerSettings({
+        providers: { claudeAgent: { routeThroughPxpipe: true } },
+        providerInstances: {
+          claude_unrouted: { driver: "claudeAgent", config: {} },
+          claude_routed: { driver: "claudeAgent", config: { routeThroughPxpipe: true } },
+          codex_routed: { driver: "codex", config: { routeThroughPxpipe: true } },
+        },
+      });
+
+      expect(
+        ["claudeAgent", "claude_unrouted", "claude_routed", "codex_routed", "codex"].map(
+          (instanceId) =>
+            instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make(instanceId), {}),
+        ),
+      ).toEqual([true, false, true, false, false]);
+    });
+
+    // `applyPxpipeRouting` leaves a hand-set base URL alone, so these turns were
+    // never going to the sidecar and its health must not stop them.
+    it("does not route an instance whose own base URL wins", () => {
+      const settings = decodeServerSettings({
+        providerInstances: {
+          claude_openrouter: {
+            driver: "claudeAgent",
+            config: { routeThroughPxpipe: true },
+            environment: [
+              { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+            ],
+          },
+        },
+      });
+
+      expect(
+        instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make("claude_openrouter"), {}),
+      ).toBe(false);
+    });
+
+    it("does not route when the server process already carries a base URL", () => {
+      const settings = decodeServerSettings({
+        providers: { claudeAgent: { routeThroughPxpipe: true } },
+        providerInstances: {
+          claude_routed: { driver: "claudeAgent", config: { routeThroughPxpipe: true } },
+        },
+      });
+      const inherited = { ANTHROPIC_BASE_URL: "https://api.internal" };
+
+      expect(
+        ["claudeAgent", "claude_routed"].map((instanceId) =>
+          instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make(instanceId), inherited),
+        ),
+      ).toEqual([false, false]);
+    });
+  });
 });
