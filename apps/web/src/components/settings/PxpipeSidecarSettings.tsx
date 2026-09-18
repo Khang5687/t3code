@@ -329,10 +329,7 @@ export function PxpipeSidecarSettings() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection
-        {...searchableSetting("sidecar-pxpipe")}
-        description="A local proxy that compresses what T3 Code sends to the Anthropic Messages API. It rewrites request bodies, so routed instances can lose Claude prompt-cache hits and pay full price for a turn they would otherwise have read from cache."
-      >
+      <SettingsSection {...searchableSetting("sidecar-pxpipe")}>
         <SettingsRow
           title="Status"
           description={status.description}
@@ -401,7 +398,7 @@ export function PxpipeSidecarSettings() {
         />
         <SettingsRow
           title="Run the pxpipe sidecar"
-          description="Start pxpipe with this environment's server and supervise it."
+          description="Start pxpipe with this environment's server and supervise it. pxpipe is a local proxy that compresses what T3 Code sends to the Anthropic Messages API. It rewrites request bodies, so routed instances can lose Claude prompt-cache hits and pay full price for a turn they would otherwise have read from cache."
           serverScoped
           control={
             <Switch
@@ -512,7 +509,6 @@ export function PxpipeSidecarSettings() {
       <SettingsSection
         id="sidecar-pxpipe-stats"
         title="Savings"
-        description="What pxpipe reports about itself, read from the proxy when this page opens, whenever the sidecar starts or stops, and when you ask."
         headerAction={
           <Button
             size="icon-xs"
@@ -527,7 +523,10 @@ export function PxpipeSidecarSettings() {
       >
         <SettingsRow
           title="Proxy stats"
-          description={describePxpipeStatsNote(state, stats) ?? undefined}
+          description={
+            describePxpipeStatsNote(state, stats) ??
+            "What pxpipe reports about itself, read from the proxy when this page opens, whenever the sidecar starts or stops, and when you ask."
+          }
           status={
             statsQuery.error ? (
               <span className="block text-destructive">{statsQuery.error}</span>
@@ -567,17 +566,13 @@ export function PxpipeSidecarSettings() {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection
-        id="sidecar-pxpipe-cache"
-        title="Cached install"
-        description="T3 Code installs the pinned pxpipe into this environment's T3 home and runs it from there."
-      >
+      <SettingsSection id="sidecar-pxpipe-cache" title="Cached install">
         <SettingsRow
           title="Version cache"
           description={
             state?.version
-              ? `pxpipe-proxy ${state.version}, under sidecars/pxpipe/${state.version} in this environment's T3 home.`
-              : "Nothing installed yet. The next start installs the pinned version."
+              ? `T3 Code runs pxpipe-proxy ${state.version} from sidecars/pxpipe/${state.version} in this environment's T3 home.`
+              : "Nothing installed yet. The next start installs the pinned version into this environment's T3 home."
           }
           status={
             canRemovePxpipeCache(state) ? null : (

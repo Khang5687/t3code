@@ -158,7 +158,7 @@ export type PxpipeProxyStats = typeof PxpipeProxyStats.Type;
  * delete. It carries a sentence the page can show as-is, because the reason is
  * the whole point of the failure.
  */
-export class SidecarOperationError extends Schema.TaggedErrorClass<SidecarOperationError>()(
+export class SidecarOperationError extends Schema.TaggedError<SidecarOperationError>()(
   "SidecarOperationError",
   {
     message: Schema.String,

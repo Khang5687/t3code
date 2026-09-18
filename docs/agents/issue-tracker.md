@@ -13,10 +13,10 @@ checkout shares, so bare `gh issue ...` calls resolve to the fork. When in doubt
 
 ## Branch and PR targets
 
-| Work           | Branch from   | PR to                           | Notes                                                                                                                     |
-| -------------- | ------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Work           | Branch from   | PR to                           | Notes                                                                                                                        |
+| -------------- | ------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Upstream-bound | `origin/main` | `pingdotgg/t3code` as **draft** | A human marks it ready. Must not carry fork-only files (`CLAUDE.md` agent block, `docs/agents/`, `CONTEXT.md`, `docs/adr/`). |
-| Fork-only      | `fork-main`   | `Khang5687/t3code`              | Local `fork-main` tracks `fork/main`.                                                                                     |
+| Fork-only      | `fork-main`   | `Khang5687/t3code`              | Local `fork-main` tracks `fork/main`.                                                                                        |
 
 Upstream-bound means an open upstream issue with no assignee that the ticket closes. `.scratch/` is
 excluded via `.git/info/exclude` (shared by all worktrees) and never enters a PR.

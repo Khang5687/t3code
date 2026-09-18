@@ -23,10 +23,16 @@ export const PersistedServerRuntimeState = Schema.Struct({
   // selection that found no Tailscale address and fell back to loopback.
   warnings: Schema.optional(Schema.Array(Schema.String)),
   startedAt: Schema.String,
+  /**
+   * Set when the boot-service launcher supervises this server. Lets a CLI
+   * tell a service-managed server apart from one started by hand, which is
+   * the difference between "restart the service" and "stop your terminal".
+   */
+  serviceManaged: Schema.optional(Schema.Boolean),
 });
 export type PersistedServerRuntimeState = typeof PersistedServerRuntimeState.Type;
 
-export class ServerRuntimeStateError extends Schema.TaggedErrorClass<ServerRuntimeStateError>()(
+export class ServerRuntimeStateError extends Schema.TaggedError<ServerRuntimeStateError>()(
   "ServerRuntimeStateError",
   {
     operation: Schema.Literals(["persist", "read", "decode", "clear"]),
@@ -50,6 +56,7 @@ export const makePersistedServerRuntimeState = (input: {
   >;
   readonly devUrl: URL | undefined;
   readonly port: number;
+  readonly serviceManaged?: boolean;
 }): Effect.Effect<PersistedServerRuntimeState> =>
   Effect.map(DateTime.now, (now) => ({
     version: 1,
@@ -62,6 +69,7 @@ export const makePersistedServerRuntimeState = (input: {
     ...(input.devUrl ? { devUrl: input.devUrl.toString() } : {}),
     ...(input.listen.warnings.length > 0 ? { warnings: input.listen.warnings } : {}),
     startedAt: DateTime.formatIso(now),
+    ...(input.serviceManaged ? { serviceManaged: true } : {}),
   }));
 
 export const persistServerRuntimeState = (input: {

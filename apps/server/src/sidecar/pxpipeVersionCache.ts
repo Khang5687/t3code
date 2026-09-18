@@ -58,7 +58,7 @@ export function pxpipeVersionPaths(
   };
 }
 
-export class PxpipeVersionCacheError extends Schema.TaggedErrorClass<PxpipeVersionCacheError>()(
+export class PxpipeVersionCacheError extends Schema.TaggedError<PxpipeVersionCacheError>()(
   "PxpipeVersionCacheError",
   {
     step: Schema.String,

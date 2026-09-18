@@ -36,7 +36,7 @@ import { resolveTailscaleAdvertisedEndpoints } from "./tailscaleEndpointProvider
 
 const TAILSCALE_STATUS_CACHE_TTL = Duration.seconds(60);
 
-export const DESKTOP_LOOPBACK_HOST = "127.0.0.1";
+const DESKTOP_LOOPBACK_HOST = "127.0.0.1";
 
 const DESKTOP_CORE_ENDPOINT_PROVIDER: AdvertisedEndpointProvider = {
   id: "desktop-core",
@@ -136,7 +136,7 @@ const resolveDesktopCoreAdvertisedEndpoints = (input: {
   return endpoints;
 };
 
-export class DesktopServerExposureNoNetworkAddressError extends Schema.TaggedErrorClass<DesktopServerExposureNoNetworkAddressError>()(
+export class DesktopServerExposureNoNetworkAddressError extends Schema.TaggedError<DesktopServerExposureNoNetworkAddressError>()(
   "DesktopServerExposureNoNetworkAddressError",
   {
     port: Schema.Number,
@@ -147,7 +147,7 @@ export class DesktopServerExposureNoNetworkAddressError extends Schema.TaggedErr
   }
 }
 
-export class DesktopServerExposureModePersistenceError extends Schema.TaggedErrorClass<DesktopServerExposureModePersistenceError>()(
+export class DesktopServerExposureModePersistenceError extends Schema.TaggedError<DesktopServerExposureModePersistenceError>()(
   "DesktopServerExposureModePersistenceError",
   {
     mode: DesktopServerExposureModeSchema,
@@ -159,7 +159,7 @@ export class DesktopServerExposureModePersistenceError extends Schema.TaggedErro
   }
 }
 
-export class DesktopTailscaleServePersistenceError extends Schema.TaggedErrorClass<DesktopTailscaleServePersistenceError>()(
+export class DesktopTailscaleServePersistenceError extends Schema.TaggedError<DesktopTailscaleServePersistenceError>()(
   "DesktopTailscaleServePersistenceError",
   {
     enabled: Schema.Boolean,
@@ -305,6 +305,7 @@ const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): bo
   !listenInterfacesEqual(previous.resolution.requested, next.resolution.requested) ||
   previous.localHttpUrl !== next.localHttpUrl;
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const networkInterfaces = yield* DesktopNetworkInterfaces.DesktopNetworkInterfaces;

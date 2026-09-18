@@ -15,6 +15,7 @@ export class EnvironmentAuthPolicy extends Context.Service<
   }
 >()("t3/auth/EnvironmentAuthPolicy") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
