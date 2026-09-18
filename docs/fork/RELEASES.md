@@ -82,7 +82,6 @@ machine from commit `2cbac8513d`, so verify them before you install:
 81b991de110e5fd047cfff1ab618693869a47d9543bd8c7707def38ef41affd7  T3-Code-0.0.42-fork.1-2cbac8513d-arm64.dmg
 ec65cf2c46834e45e6696f77446658d82b21c0c4f02daaac5fe1842353fb0039  T3-Code-0.0.42-fork.1-2cbac8513d-arm64.zip
 0a80560389e7354795bac46549a5241f074ad016e57f185e7da36c53051b0f1b  t3code-mobile-preview-arm64-v8a-2cbac8513d.apk
-dbc12acdcda421a4ced247b3972bbec25016671e5f5e48e7fdaa825e29df61f6  t3code-mobile-preview-universal-2cbac8513d.apk
 ```
 
 **macOS arm64 desktop**, ad-hoc signed and not notarized. Gatekeeper quarantines
