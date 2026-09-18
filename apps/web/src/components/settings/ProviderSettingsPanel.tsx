@@ -85,6 +85,7 @@ import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { pxpipeRoutingActive } from "@t3tools/client-runtime/state/pxpipe";
 import { pxpipeRoutingTrouble } from "./PxpipeSidecarSettings.logic";
+import { SkillsSettings } from "./SkillsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
@@ -321,7 +322,8 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
     if (
       !target.scoped &&
       (searchTargetId === searchableSetting("provider-health-check-interval").id ||
-        searchTargetId === searchableSetting("usage-providers").id) &&
+        searchTargetId === searchableSetting("usage-providers").id ||
+        searchTargetId === searchableSetting("skills").id) &&
       !selectedEnvironmentCanRenderSettings &&
       searchableEnvironmentId !== undefined
     ) {
@@ -1108,6 +1110,13 @@ export function EnvironmentProviderSettings({
           </div>
         </SettingsGroup>
       </SettingsSection>
+
+      <SkillsSettings
+        environmentId={environmentId}
+        providers={serverProviders}
+        disabledSkills={settings.disabledSkills}
+        readOnly={readOnly}
+      />
 
       <UsageProviderSettings
         key={environmentId}
