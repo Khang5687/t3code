@@ -31,6 +31,10 @@ import {
   readCustomModelEntries,
   toCustomModelSetting,
 } from "@t3tools/shared/model";
+import {
+  pxpipeRoutingOverride,
+  readRouteThroughPxpipe,
+} from "@t3tools/client-runtime/state/pxpipe";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -46,11 +50,7 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
-import {
-  pxpipeRoutingOverride,
-  type PxpipeRoutingTrouble,
-  readRouteThroughPxpipe,
-} from "./PxpipeSidecarSettings.logic";
+import type { PxpipeRoutingTrouble } from "./PxpipeSidecarSettings.logic";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import {

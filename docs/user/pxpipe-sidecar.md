@@ -30,6 +30,11 @@ instance, and turn on **Route through pxpipe**. Instances you leave alone keep
 talking to Anthropic directly and behave the same as before. Only Claude
 instances offer the switch, because pxpipe serves the Anthropic API.
 
+On the mobile app the same switches live under **Settings > pxpipe**, one section
+per connected environment, above what that environment's sidecar reports about
+itself. Mobile cannot start, stop, or configure a sidecar; use the web or
+desktop app for that.
+
 Running the sidecar on its own sends no traffic through it. Nothing changes
 until you route at least one instance.
 

@@ -123,6 +123,10 @@
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
     },
+    "./state/pxpipe": {
+      "types": "./src/state/pxpipe.ts",
+      "default": "./src/state/pxpipe.ts"
+    },
     "./state/presentation": {
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"

@@ -27,17 +27,19 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
+  describePxpipeStatus,
+  type PxpipeStatusDisplay,
+} from "@t3tools/client-runtime/state/pxpipe";
+import {
   canRemovePxpipeCache,
   canStopPxpipe,
   describePxpipeStatsNote,
-  describePxpipeStatus,
   formatModelAllowlist,
   isInvalidSidecarEnvironmentName,
   parseModelAllowlist,
   publishableSidecarEnvironment,
   pxpipeBaseUrl,
   readPxpipeStats,
-  type PxpipeStatusDisplay,
   type SidecarEnvironmentDraftRow,
 } from "./PxpipeSidecarSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
