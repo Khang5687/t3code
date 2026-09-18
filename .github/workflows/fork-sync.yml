@@ -1,0 +1,87 @@
+name: Fork sync
+
+# Mirrors upstream into the fork's `main` and checks whether `fork-main` still
+# rebases cleanly. It never pushes `fork-main`; a human runs the real rebase
+# (see docs/fork/WORKFLOW.md).
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Mirror upstream and dry-run the fork-main rebase
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin fork-main
+
+      # A plain push is fast-forward only: the server rejects anything else, so
+      # the fork's `main` can never diverge from upstream here.
+      - name: Fast-forward the fork's main to upstream
+        run: git push origin refs/remotes/upstream/main:refs/heads/main
+
+      - name: Dry-run the fork-main rebase
+        id: rebase
+        run: |
+          set -uo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --quiet -B fork-sync-dry-run origin/fork-main
+          if git rebase upstream/main; then
+            echo "fork-main rebases cleanly onto upstream/main."
+            echo "conflicted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only --diff-filter=U | sort -u > conflicts.txt
+          git rebase --abort || true
+          echo "conflicted=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "files<<EOF"
+            cat conflicts.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "fork-main conflicts with upstream/main:"
+          cat conflicts.txt
+
+      - name: Open or update the conflict issue
+        if: steps.rebase.outputs.conflicted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONFLICT_FILES: ${{ steps.rebase.outputs.files }}
+        run: |
+          short_sha="$(git rev-parse --short upstream/main)"
+          title="fork-main rebase conflict on upstream ${short_sha}"
+          body="$(
+            printf '%s\n\n' "\`fork-main\` no longer rebases onto \`upstream/main\` at \`${short_sha}\`."
+            printf '%s\n' 'Conflicting files:'
+            printf '%s\n' "$CONFLICT_FILES" | sed 's/^/- `/; s/$/`/'
+            printf '\n%s\n' "Resolve with \`scripts/fork/sync.sh\` on a local \`fork-main\`. See [docs/fork/WORKFLOW.md](docs/fork/WORKFLOW.md)."
+            printf '\n%s\n' "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          )"
+          gh label create needs-triage --color fbca04 --description "Issue needs maintainer review and initial categorization." --force
+          existing="$(TITLE="$title" gh issue list --state open --limit 100 --json number,title \
+            --jq 'first(.[] | select(.title == env.TITLE) | .number) // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label needs-triage
+          fi
