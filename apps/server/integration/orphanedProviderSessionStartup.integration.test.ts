@@ -27,6 +27,7 @@ import * as ServiceLauncherClient from "../src/cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import * as Keybindings from "../src/keybindings.ts";
+import * as ListenAddress from "../src/listenAddress.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import * as OrchestrationEngine from "../src/orchestration/Services/OrchestrationEngine.ts";
 import * as OrchestrationReactor from "../src/orchestration/Services/OrchestrationReactor.ts";
@@ -80,6 +81,7 @@ const startupDependencies = Layer.mergeAll(
     start: () => Effect.void,
   }),
   ServerLifecycleEvents.layer,
+  ListenAddress.layer({ interfaces: {} }),
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-startup-orphan")),
     getDescriptor: Effect.succeed({

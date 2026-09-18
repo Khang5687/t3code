@@ -14,6 +14,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -146,6 +147,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import * as ListenAddress from "./listenAddress.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -223,21 +225,76 @@ const RelayClientLive = Layer.unwrap(
   }),
 );
 
-const HttpServerLive = Layer.unwrap(
+/**
+ * One listening socket per resolved address (ADR 0003). Each address gets its
+ * own platform server and `serve` installs the same request handler on all of
+ * them, so nothing binds a wildcard unless a wildcard was asked for. The first
+ * bind fixes the port, which keeps `--port 0` landing every address on one
+ * ephemeral port.
+ */
+const multiBindHttpServer = <E>(
+  bindHosts: ReadonlyArray<string>,
+  port: number,
+  makeServer: (
+    host: string,
+    port: number,
+  ) => Effect.Effect<HttpServer.HttpServer["Service"], E, Scope.Scope>,
+): Effect.Effect<HttpServer.HttpServer["Service"], E, Scope.Scope> =>
+  Effect.gen(function* () {
+    const servers: Array<HttpServer.HttpServer["Service"]> = [];
+    for (const host of bindHosts) {
+      // Only a TCP bind carries a port for the rest to reuse; a Unix socket
+      // leaves them on the configured one.
+      const first = servers[0]?.address;
+      servers.push(yield* makeServer(host, first?._tag === "TcpAddress" ? first.port : port));
+    }
+
+    const [primary, ...rest] = servers;
+    if (primary === undefined) {
+      return yield* Effect.die(new Error("A listen selection always resolves to one address"));
+    }
+    if (rest.length === 0) {
+      return primary;
+    }
+
+    return HttpServer.make({
+      address: primary.address,
+      // `HttpServer.make` types the served effect with `unknown` in its error
+      // channel, and fanning it out over the listeners cannot narrow that.
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      serve: (httpEffect, middleware) =>
+        // The same `unknown` error channel, restated for the fan-out call.
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+        Effect.forEach(servers, (server) => server.serve(httpEffect, middleware!), {
+          discard: true,
+        }),
+    });
+  });
+
+export const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    return NodeHttpServer.layer(() => guardHttpResponseWriteErrors(NodeHttp.createServer()), {
-      host: config.host ?? "127.0.0.1",
-      port: config.port,
-      gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
-      // Negotiate permessage-deflate with clients that offer it; clients
-      // that don't still get uncompressed frames on their connection.
-      // Context takeover stays enabled (ws default) so the compression
-      // window is shared across frames — that also makes small frames cheap
-      // to compress, so no size threshold is set (ws only honors
-      // `threshold` when context takeover is disabled).
-      websocket: { perMessageDeflate: true },
-    });
+    const listen = yield* ListenAddress.ListenAddress;
+    const makeNodeServer = (host: string, port: number) =>
+      NodeHttpServer.make(() => guardHttpResponseWriteErrors(NodeHttp.createServer()), {
+        host,
+        port,
+        gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
+        // Negotiate permessage-deflate with clients that offer it; clients
+        // that don't still get uncompressed frames on their connection.
+        // Context takeover stays enabled (ws default) so the compression
+        // window is shared across frames — that also makes small frames cheap
+        // to compress, so no size threshold is set (ws only honors
+        // `threshold` when context takeover is disabled).
+        websocket: { perMessageDeflate: true },
+      });
+    return Layer.mergeAll(
+      Layer.effect(
+        HttpServer.HttpServer,
+        multiBindHttpServer(listen.bindHosts, config.port, makeNodeServer),
+      ),
+      NodeHttpServer.layerHttpServices,
+    );
   }),
 );
 
@@ -632,7 +689,8 @@ const makeServerLayer = Layer.unwrap(
 
           const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
           const state = yield* makePersistedServerRuntimeState({
-            config,
+            listen: yield* ListenAddress.ListenAddress,
+            devUrl: config.devUrl,
             port: address.port,
             serviceManaged: launcher.managed,
           });
@@ -813,5 +871,6 @@ const makeServerLayer = Layer.unwrap(
   }),
 );
 
-// The CLI supplies configuration.
-export const runServer = Layer.launch(makeServerLayer);
+// The CLI supplies configuration. The listen address resolves once here, from
+// the live interface table; tests hand `makeServerLayer` a pinned one instead.
+export const runServer = Layer.launch(makeServerLayer.pipe(Layer.provide(ListenAddress.layer())));

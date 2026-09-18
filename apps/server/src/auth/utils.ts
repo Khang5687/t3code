@@ -25,7 +25,7 @@ const SESSION_COOKIE_NAME = "t3_session";
 export function resolveSessionCookieName(input: {
   readonly mode: "web" | "desktop";
   readonly port: number;
-  readonly host: string | undefined;
+  readonly remoteReachable: boolean;
   readonly instanceKey: string;
   readonly environmentId: string;
   readonly development: boolean;
@@ -35,15 +35,11 @@ export function resolveSessionCookieName(input: {
   }
 
   const instanceHash = NodeCrypto.createHash("sha256")
-    .update(
-      !input.development && isRemoteReachableHost(input.host)
-        ? input.environmentId
-        : input.instanceKey,
-    )
+    .update(!input.development && input.remoteReachable ? input.environmentId : input.instanceKey)
     .digest("hex")
     .slice(0, 12);
 
-  if (!input.development && isRemoteReachableHost(input.host)) {
+  if (!input.development && input.remoteReachable) {
     return `${SESSION_COOKIE_NAME}_${instanceHash}`;
   }
 
@@ -55,28 +51,12 @@ export function resolveSessionCookieName(input: {
 
 export function resolveLegacySessionCookieName(input: {
   readonly mode: "web" | "desktop";
-  readonly host: string | undefined;
+  readonly remoteReachable: boolean;
   readonly development: boolean;
 }): string | undefined {
-  return input.mode === "web" && !input.development && isRemoteReachableHost(input.host)
+  return input.mode === "web" && !input.development && input.remoteReachable
     ? SESSION_COOKIE_NAME
     : undefined;
-}
-
-export function isRemoteReachableHost(host: string | undefined): boolean {
-  if (host === "0.0.0.0" || host === "::" || host === "[::]") {
-    return true;
-  }
-  if (!host || host.length === 0) {
-    return false;
-  }
-  return !(
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "[::1]" ||
-    host.startsWith("127.")
-  );
 }
 
 export function base64UrlEncode(input: string | Uint8Array): string {

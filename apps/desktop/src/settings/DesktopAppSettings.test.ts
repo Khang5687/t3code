@@ -25,6 +25,12 @@ const DesktopSettingsPatch = Schema.Struct({
     ),
   ),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
+  listenInterfaces: Schema.optionalKey(
+    Schema.Struct({
+      kinds: Schema.Array(Schema.Literals(["loopback", "tailnet", "lan"])),
+      addresses: Schema.optionalKey(Schema.Array(Schema.String)),
+    }),
+  ),
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
@@ -38,6 +44,9 @@ const DesktopSettingsPatch = Schema.Struct({
 
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 const encodeDesktopSettingsPatch = Schema.encodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
+
+const LOCAL_ONLY_INTERFACES = { kinds: ["loopback"], addresses: [] } as const;
+const LAN_INTERFACES = { kinds: ["loopback", "tailnet", "lan"], addresses: [] } as const;
 
 function makeEnvironmentLayer(baseDir: string, appVersion = "0.0.17") {
   return DesktopEnvironment.layer({
@@ -127,6 +136,7 @@ describe("DesktopSettings", () => {
         localEnvironmentEnabled: true,
         mainWindowBounds: null,
         mainWindowMaximized: false,
+        listenInterfaces: LOCAL_ONLY_INTERFACES,
         serverExposureMode: "local-only",
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
@@ -157,6 +167,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          listenInterfaces: LAN_INTERFACES,
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
@@ -265,6 +276,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
+          listenInterfaces: LAN_INTERFACES,
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
@@ -322,6 +334,7 @@ describe("DesktopSettings", () => {
             localEnvironmentEnabled: true,
             mainWindowBounds: null,
             mainWindowMaximized: false,
+            listenInterfaces: LAN_INTERFACES,
             serverExposureMode: "network-accessible",
             tailscaleServeEnabled: true,
             tailscaleServePort: 8443,
@@ -351,6 +364,7 @@ describe("DesktopSettings", () => {
         assert.deepEqual(persisted, {
           mainWindowBounds: { x: -1200, y: 40, width: 1440, height: 960 },
           mainWindowMaximized: true,
+          listenInterfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
           serverExposureMode: "network-accessible",
         } satisfies typeof DesktopSettingsPatch.Type);
       }),
@@ -371,6 +385,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          listenInterfaces: LOCAL_ONLY_INTERFACES,
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
@@ -400,6 +415,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          listenInterfaces: LOCAL_ONLY_INTERFACES,
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
@@ -428,6 +444,7 @@ describe("DesktopSettings", () => {
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          listenInterfaces: LOCAL_ONLY_INTERFACES,
           serverExposureMode: "local-only",
           tailscaleServeEnabled: true,
           tailscaleServePort: 443,
@@ -527,6 +544,68 @@ describe("DesktopSettings", () => {
         const loaded = yield* settings.load;
         assert.equal(loaded.wslBackendEnabled, true);
         assert.equal(loaded.wslDistro, null);
+      }),
+    ),
+  );
+
+  it.effect("migrates the legacy exposure key to a listen-interface selection", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* writeSettingsPatch({ serverExposureMode: "network-accessible" });
+
+        const loaded = yield* settings.load;
+        assert.deepEqual(loaded.listenInterfaces, LAN_INTERFACES);
+        assert.equal(loaded.serverExposureMode, "network-accessible");
+      }),
+    ),
+  );
+
+  it.effect("prefers the persisted selection over the legacy key", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        // A downgrade and back leaves both keys on disk; the selection wins.
+        yield* writeSettingsPatch({
+          listenInterfaces: { kinds: ["loopback", "tailnet"] },
+          serverExposureMode: "network-accessible",
+        });
+
+        const loaded = yield* settings.load;
+        assert.deepEqual(loaded.listenInterfaces, {
+          kinds: ["loopback", "tailnet"],
+          addresses: [],
+        });
+        assert.equal(loaded.serverExposureMode, "network-accessible");
+      }),
+    ),
+  );
+
+  it.effect("dual-writes the derived legacy mode next to the selection", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        const change = yield* settings.setListenInterfaces({ kinds: ["tailnet"] });
+        assert.isTrue(change.changed);
+        assert.deepEqual(change.settings.listenInterfaces, {
+          kinds: ["loopback", "tailnet"],
+          addresses: [],
+        });
+
+        const persisted = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        assert.deepEqual(persisted, {
+          listenInterfaces: { kinds: ["loopback", "tailnet"], addresses: [] },
+          serverExposureMode: "network-accessible",
+        } satisfies typeof DesktopSettingsPatch.Type);
+
+        // Same set, different order: no write.
+        const noop = yield* settings.setListenInterfaces({ kinds: ["tailnet", "loopback"] });
+        assert.isFalse(noop.changed);
       }),
     ),
   );

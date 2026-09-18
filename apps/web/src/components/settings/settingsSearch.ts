@@ -710,10 +710,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "network-access",
-    title: "Network access",
+    title: "Exposure",
     to: "/settings/connections",
     targetId: "connections-environment",
-    searchTerms: ["expose backend remote pairing local machine interfaces host restart"],
+    searchTerms: [
+      "expose backend remote pairing local machine interfaces host restart",
+      "network access preset listen interface loopback tailnet tailscale lan custom",
+    ],
     localBackendManagementOnly: true,
   },
   {

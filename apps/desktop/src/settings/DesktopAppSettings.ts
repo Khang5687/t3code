@@ -1,8 +1,16 @@
 import {
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
+  ListenInterfaces,
+  formatListenInterfaces,
+  legacyExposureModeOf,
+  listenInterfacesEqual,
+  listenInterfacesForLegacyExposureMode,
+  listenInterfacesForPreset,
+  normalizeListenInterfaces,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
+  type ListenInterfacesInput,
 } from "@t3tools/contracts";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Context from "effect/Context";
@@ -29,6 +37,12 @@ export interface DesktopSettings {
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
+  /** Fork-only (ADR 0003). The listen-interface selection this environment asks for. */
+  readonly listenInterfaces: ListenInterfaces;
+  /**
+   * Derived from `listenInterfaces`, and persisted alongside it so an upstream
+   * build still reads something sane after a downgrade.
+   */
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -78,6 +92,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
+  listenInterfaces: listenInterfacesForPreset("local-only"),
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
@@ -100,6 +115,9 @@ const DesktopSettingsDocument = Schema.Struct({
   linuxPasswordStore: Schema.optionalKey(Schema.Unknown),
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
+  // Newer form of the exposure setting. `serverExposureMode` is still read when
+  // this key is absent, and is written next to it so a downgrade keeps working.
+  listenInterfaces: Schema.optionalKey(ListenInterfaces),
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
@@ -165,6 +183,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly setServerExposureMode: (
       mode: DesktopServerExposureMode,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setListenInterfaces: (
+      listenInterfaces: ListenInterfacesInput,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setTailscaleServe: (input: {
       readonly enabled: boolean;
       readonly port: Option.Option<number>;
@@ -229,13 +250,21 @@ function normalizeDesktopSettingsDocument(
     parsed.wslBackendEnabled === true ||
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
+  // One-way migration: the legacy key seeds the selection only while the new
+  // key is absent. The next write puts both on disk.
+  const listenInterfaces =
+    parsed.listenInterfaces ??
+    listenInterfacesForLegacyExposureMode(
+      parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
+    );
+
   return {
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
-    serverExposureMode:
-      parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
+    listenInterfaces,
+    serverExposureMode: legacyExposureModeOf(listenInterfaces),
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
     updateChannel: updateChannelConfiguredByUser
@@ -267,6 +296,9 @@ function toDesktopSettingsDocument(
   if (settings.mainWindowMaximized) {
     document.mainWindowMaximized = true;
   }
+  if (!listenInterfacesEqual(settings.listenInterfaces, defaults.listenInterfaces)) {
+    document.listenInterfaces = settings.listenInterfaces;
+  }
   if (settings.serverExposureMode !== defaults.serverExposureMode) {
     document.serverExposureMode = settings.serverExposureMode;
   }
@@ -295,16 +327,26 @@ function toDesktopSettingsDocument(
   return document;
 }
 
+function setListenInterfaces(
+  settings: DesktopSettings,
+  requested: ListenInterfacesInput,
+): DesktopSettings {
+  const listenInterfaces = normalizeListenInterfaces(requested);
+  return listenInterfacesEqual(settings.listenInterfaces, listenInterfaces)
+    ? settings
+    : {
+        ...settings,
+        listenInterfaces,
+        serverExposureMode: legacyExposureModeOf(listenInterfaces),
+      };
+}
+
+/** Upstream's two-valued setter, mapped onto the matching preset. */
 function setServerExposureMode(
   settings: DesktopSettings,
   requestedMode: DesktopServerExposureMode,
 ): DesktopSettings {
-  return settings.serverExposureMode === requestedMode
-    ? settings
-    : {
-        ...settings,
-        serverExposureMode: requestedMode,
-      };
+  return setListenInterfaces(settings, listenInterfacesForLegacyExposureMode(requestedMode));
 }
 
 function setMainWindowBounds(
@@ -540,6 +582,14 @@ export const make = Effect.gen(function* () {
       persist((settings) => setServerExposureMode(settings, mode)).pipe(
         Effect.withSpan("desktop.settings.setServerExposureMode", { attributes: { mode } }),
       ),
+    setListenInterfaces: (listenInterfaces) =>
+      persist((settings) => setListenInterfaces(settings, listenInterfaces)).pipe(
+        Effect.withSpan("desktop.settings.setListenInterfaces", {
+          attributes: {
+            listenSelection: formatListenInterfaces(normalizeListenInterfaces(listenInterfaces)),
+          },
+        }),
+      ),
     setTailscaleServe: (input) =>
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
@@ -601,6 +651,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
+        setListenInterfaces: (listenInterfaces) =>
+          update((settings) => setListenInterfaces(settings, listenInterfaces)),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
         setWslBackendEnabled: (enabled) =>

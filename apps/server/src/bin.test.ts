@@ -39,6 +39,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as ListenAddress from "./listenAddress.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -385,6 +386,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
           Layer.provideMerge(SqlitePersistenceLayerLive),
           Layer.provide(ServerEnvironment.identityLayer),
           Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ListenAddress.layer({ interfaces: {} })),
         ),
       ),
       Layer.provideMerge(makeProjectPersistenceLayer(config)),
@@ -408,7 +410,8 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
         yield* persistServerRuntimeState({
           path: config.serverRuntimeStatePath,
           state: yield* makePersistedServerRuntimeState({
-            config,
+            listen: ListenAddress.resolveListenAddress(config.host, {}),
+            devUrl: config.devUrl,
             port: address.port,
           }),
         });

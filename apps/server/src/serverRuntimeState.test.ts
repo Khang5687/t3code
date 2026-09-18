@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 
+import { resolveListenAddress } from "./listenAddress.ts";
 import * as ServerRuntimeState from "./serverRuntimeState.ts";
 
 const isServerRuntimeStateError = Schema.is(ServerRuntimeState.ServerRuntimeStateError);
@@ -46,8 +47,10 @@ describe("serverRuntimeState", () => {
 
   it.effect("records the dev web URL when the server fronts a dev server", () =>
     Effect.gen(function* () {
+      const listen = resolveListenAddress(undefined, {});
       const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
-        config: { host: undefined, devUrl: new URL("http://localhost:5733") },
+        listen,
+        devUrl: new URL("http://localhost:5733"),
         port: 13_773,
       });
 
@@ -55,22 +58,87 @@ describe("serverRuntimeState", () => {
       assert.equal(state.origin, "http://127.0.0.1:13773");
 
       const withoutDev = yield* ServerRuntimeState.makePersistedServerRuntimeState({
-        config: { host: undefined, devUrl: undefined },
+        listen,
+        devUrl: undefined,
         port: 13_773,
       });
       assert.isFalse("devUrl" in withoutDev);
     }),
   );
 
+  it.effect("carries the loopback fallback warnings of a tailnet selection", () =>
+    Effect.gen(function* () {
+      const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
+        listen: resolveListenAddress("tailnet", {}),
+        devUrl: undefined,
+        port: 13_773,
+      });
+
+      assert.equal(state.host, "tailnet");
+      assert.equal(state.origin, "http://127.0.0.1:13773");
+      assert.deepEqual(state.addresses, ["127.0.0.1"]);
+      assert.isTrue((state.warnings ?? []).some((warning) => /loopback only/i.test(warning)));
+    }),
+  );
+
+  it.effect("records every address a multi-interface selection bound", () =>
+    Effect.gen(function* () {
+      const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
+        listen: resolveListenAddress("lan", {
+          lo0: [
+            {
+              address: "127.0.0.1",
+              netmask: "255.0.0.0",
+              family: "IPv4",
+              mac: "00:00:00:00:00:00",
+              internal: true,
+              cidr: "127.0.0.1/8",
+            },
+          ],
+          en0: [
+            {
+              address: "192.168.1.42",
+              netmask: "255.255.255.0",
+              family: "IPv4",
+              mac: "00:00:00:00:00:00",
+              internal: false,
+              cidr: "192.168.1.42/24",
+            },
+          ],
+        }),
+        devUrl: undefined,
+        port: 13_773,
+      });
+
+      assert.deepEqual(state.addresses, ["127.0.0.1", "192.168.1.42"]);
+      // Local CLIs keep dialing loopback even though the LAN address is bound.
+      assert.equal(state.origin, "http://127.0.0.1:13773");
+    }),
+  );
+
+  it.effect("omits warnings entirely when the bind matched the request", () =>
+    Effect.gen(function* () {
+      const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
+        listen: resolveListenAddress(undefined, {}),
+        devUrl: undefined,
+        port: 13_773,
+      });
+
+      assert.isFalse("warnings" in state);
+    }),
+  );
+
   it.effect("marks a service-supervised server so CLIs can tell it from a manual one", () =>
     Effect.gen(function* () {
       const managed = yield* ServerRuntimeState.makePersistedServerRuntimeState({
-        config: { host: undefined, devUrl: undefined },
+        listen: resolveListenAddress(undefined, {}),
+        devUrl: undefined,
         port: 13_773,
         serviceManaged: true,
       });
       const manual = yield* ServerRuntimeState.makePersistedServerRuntimeState({
-        config: { host: undefined, devUrl: undefined },
+        listen: resolveListenAddress(undefined, {}),
+        devUrl: undefined,
         port: 13_773,
       });
 

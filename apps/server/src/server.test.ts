@@ -107,6 +107,7 @@ const encodeTestJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unk
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
+import * as ListenAddress from "./listenAddress.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { HTTP_ROUTER_CONFIG, makeRoutesLayer } from "./server.ts";
 import {
@@ -1215,7 +1216,13 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(GitHubCli.layer.pipe(Layer.provideMerge(VcsProcess.layer))),
+      // Merged into one `provide` to stay inside `Layer.pipe`'s arity limit.
+      Layer.provide(
+        Layer.mergeAll(
+          GitHubCli.layer.pipe(Layer.provideMerge(VcsProcess.layer)),
+          ListenAddress.layer({ interfaces: {} }),
+        ),
+      ),
       Layer.provide(layerConfig),
     );
 

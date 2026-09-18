@@ -97,6 +97,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import { ExposurePreset, ListenInterfaces, type ListenInterfacesInput } from "./exposure.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -571,7 +572,16 @@ export const DesktopServerExposureModeSchema = Schema.Literals([
 ]);
 
 export interface DesktopServerExposureState {
+  /** Derived (ADR 0003): `local-only` iff the effective selection is exactly {loopback}. */
   mode: DesktopServerExposureMode;
+  /** What the user asked to listen on. The server resolves it; this is never a bind address. */
+  listenInterfaces: ListenInterfaces;
+  preset: ExposurePreset;
+  /** Resolved through the shared resolver for display only; the server stays authoritative. */
+  resolvedAddresses: ReadonlyArray<string>;
+  warnings: ReadonlyArray<string>;
+  /** Tailscale Serve only runs when `tailnet` is selected. */
+  tailscaleServeAvailable: boolean;
   endpointUrl: string | null;
   advertisedHost: string | null;
   tailscaleServeEnabled: boolean;
@@ -580,6 +590,11 @@ export interface DesktopServerExposureState {
 
 export const DesktopServerExposureStateSchema = Schema.Struct({
   mode: DesktopServerExposureModeSchema,
+  listenInterfaces: ListenInterfaces,
+  preset: ExposurePreset,
+  resolvedAddresses: Schema.Array(Schema.String),
+  warnings: Schema.Array(Schema.String),
+  tailscaleServeAvailable: Schema.Boolean,
   endpointUrl: Schema.NullOr(Schema.String),
   advertisedHost: Schema.NullOr(Schema.String),
   tailscaleServeEnabled: Schema.Boolean,
@@ -1278,6 +1293,13 @@ export interface DesktopBridge {
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
+  /**
+   * Fork-only (ADR 0003). `setServerExposureMode` stays as the two-valued
+   * spelling upstream builds call; this takes the full selection.
+   */
+  setServerListenInterfaces: (
+    listenInterfaces: ListenInterfacesInput,
+  ) => Promise<DesktopServerExposureState>;
   setTailscaleServeEnabled: (input: {
     readonly enabled: boolean;
     readonly port?: number;

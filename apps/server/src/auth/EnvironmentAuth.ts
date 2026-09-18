@@ -31,6 +31,7 @@ import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ListenAddress from "../listenAddress.ts";
 import * as ServerConfig from "../config.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
@@ -1127,7 +1128,10 @@ export const layer = Layer.effect(EnvironmentAuth, make).pipe(
 
 const storageLayer = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistenceLayer);
 
+// CLI entry points (pair, auth, project, connect) compose this without going
+// through server.ts, so the listen address resolves here too.
 export const runtimeLayer = layer.pipe(
   Layer.provideMerge(storageLayer),
   Layer.provideMerge(ServerEnvironment.identityLayer),
+  Layer.provide(ListenAddress.layer()),
 );

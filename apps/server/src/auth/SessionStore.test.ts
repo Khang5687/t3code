@@ -14,6 +14,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ListenAddress from "../listenAddress.ts";
 import { PersistenceSqlError } from "../persistence/Errors.ts";
 import {
   makeSqlitePersistenceLive,
@@ -48,6 +49,7 @@ const makeSessionStoreLayer = (
     Layer.provide(SqlitePersistenceMemory),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(makeServerEnvironmentLayer(environmentId)),
+    Layer.provide(ListenAddress.layer({ interfaces: {} })),
     Layer.provide(makeServerConfigLayer(overrides)),
   );
 
@@ -73,6 +75,7 @@ const makeDiskSessionStoreLayer = Effect.fn("makeDiskSessionStoreLayer")(functio
     Layer.provide(persistence),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(makeServerEnvironmentLayer(EnvironmentId.make(baseDir))),
+    Layer.provide(ListenAddress.layer({ interfaces: {} })),
     Layer.provide(
       makeServerConfigLayer({
         ...paths,
@@ -110,6 +113,7 @@ const failingSessionLookupCredentialLayer = Layer.effect(
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(SqlitePersistenceMemory),
   Layer.provide(makeServerEnvironmentLayer(EnvironmentId.make("test-environment"))),
+  Layer.provide(ListenAddress.layer({ interfaces: {} })),
   Layer.provide(makeServerConfigLayer()),
 );
 

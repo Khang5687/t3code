@@ -5,8 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "./atomicWrite.ts";
-import type * as ServerConfig from "./config.ts";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess.ts";
+import type { ResolvedListenAddress } from "./listenAddress.ts";
 
 export const PersistedServerRuntimeState = Schema.Struct({
   version: Schema.Literal(1),
@@ -14,9 +13,15 @@ export const PersistedServerRuntimeState = Schema.Struct({
   host: Schema.optional(Schema.String),
   port: Schema.Int,
   origin: Schema.String,
+  // Every address the server bound, loopback first. `origin` names only the
+  // one a local CLI should dial.
+  addresses: Schema.optional(Schema.Array(Schema.String)),
   // Present when the server fronts a dev web server (VITE_DEV_SERVER_URL).
   // Dev is single-origin: browsers must pair through this URL, not `origin`.
   devUrl: Schema.optional(Schema.String),
+  // Why the bind differs from the requested exposure, for example a tailnet
+  // selection that found no Tailscale address and fell back to loopback.
+  warnings: Schema.optional(Schema.Array(Schema.String)),
   startedAt: Schema.String,
   /**
    * Set when the boot-service launcher supervises this server. Lets a CLI
@@ -44,27 +49,25 @@ const decodePersistedServerRuntimeState = Schema.decodeUnknownEffect(
   Schema.fromJsonString(PersistedServerRuntimeState),
 );
 
-const runtimeOriginForConfig = (
-  config: Pick<ServerConfig.ServerConfig["Service"], "host">,
-  port: number,
-): PersistedServerRuntimeState["origin"] => {
-  const hostname =
-    config.host && !isWildcardHost(config.host) ? formatHostForUrl(config.host) : "127.0.0.1";
-  return `http://${hostname}:${port}`;
-};
-
 export const makePersistedServerRuntimeState = (input: {
-  readonly config: Pick<ServerConfig.ServerConfig["Service"], "host" | "devUrl">;
+  readonly listen: Pick<
+    ResolvedListenAddress,
+    "configuredHost" | "urlHost" | "warnings" | "bindHosts"
+  >;
+  readonly devUrl: URL | undefined;
   readonly port: number;
   readonly serviceManaged?: boolean;
 }): Effect.Effect<PersistedServerRuntimeState> =>
   Effect.map(DateTime.now, (now) => ({
     version: 1,
     pid: process.pid,
-    ...(input.config.host ? { host: input.config.host } : {}),
+    ...(input.listen.configuredHost ? { host: input.listen.configuredHost } : {}),
     port: input.port,
-    origin: runtimeOriginForConfig(input.config, input.port),
-    ...(input.config.devUrl ? { devUrl: input.config.devUrl.toString() } : {}),
+    // Wildcard binds answer on loopback, so local CLIs reach them there.
+    origin: `http://${input.listen.urlHost ?? "127.0.0.1"}:${input.port}`,
+    addresses: input.listen.bindHosts,
+    ...(input.devUrl ? { devUrl: input.devUrl.toString() } : {}),
+    ...(input.listen.warnings.length > 0 ? { warnings: input.listen.warnings } : {}),
     startedAt: DateTime.formatIso(now),
     ...(input.serviceManaged ? { serviceManaged: true } : {}),
   }));

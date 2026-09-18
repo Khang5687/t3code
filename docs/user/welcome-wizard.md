@@ -18,8 +18,9 @@ You can add more computers before continuing:
   computer stays available.
 - **Add a computer** connects directly to a server on your network or tailnet.
   Start the server with `t3 serve`, then run `t3 pair --tailscale` and paste
-  the pairing link. You can also run `t3 serve --host <address>` and use
-  `t3 pair` when the server is already reachable on your network.
+  the pairing link. You can also run `t3 serve --host tailnet` (or
+  `--host <address>`) and use `t3 pair` when the server is already reachable on
+  your network.
 
 Saved computers and computers discovered through T3 Connect are selected by
 default. Uncheck any you do not want to set up; this does not disconnect them.

@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { listenInterfacesForPreset } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -54,12 +55,13 @@ const serverExposureLayer = Layer.succeed(DesktopServerExposure.DesktopServerExp
   getState: Effect.die("unexpected getState"),
   backendConfig: Effect.succeed({
     port: 3773,
-    bindHost: "127.0.0.1",
+    listenInterfaces: listenInterfacesForPreset("local-only"),
     httpBaseUrl: new URL("http://127.0.0.1:3773"),
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
   }),
   configureFromSettings: () => Effect.die("unexpected configureFromSettings"),
+  setListenInterfaces: () => Effect.die("unexpected setListenInterfaces"),
   setMode: () => Effect.die("unexpected setMode"),
   setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
   getAdvertisedEndpoints: Effect.succeed([]),
