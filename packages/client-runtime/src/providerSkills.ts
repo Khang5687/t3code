@@ -50,7 +50,7 @@ export function dedupeProviderSkillsByName(
  * Everything else, including skills the agent may not start on its own, is
  * fair game: the server dispatches the pick in the provider's native form.
  */
-export function isProviderSkillUserInvocable(
+function isProviderSkillUserInvocable(
   skill: Pick<ServerProviderSkill, "enabled" | "userInvocable">,
 ): boolean {
   return skill.enabled && skill.userInvocable !== false;

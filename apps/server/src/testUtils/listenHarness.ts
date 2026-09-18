@@ -48,7 +48,7 @@ export type TcpProbeOutcome =
   | { readonly outcome: "accept" }
   | { readonly outcome: "refuse"; readonly code: string };
 
-export class ListenHarnessError extends Data.TaggedError("ListenHarnessError")<{
+class ListenHarnessError extends Data.TaggedError("ListenHarnessError")<{
   readonly cause: unknown;
 }> {}
 

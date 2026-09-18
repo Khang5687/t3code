@@ -109,7 +109,7 @@ export function upsertProviderWorkspaceSnapshot(
  * the provider reported them, so switching a skill back on takes effect on the
  * next read instead of waiting for a rescan the fold could not undo.
  */
-export function foldDisabledSkills(
+function foldDisabledSkills(
   providers: ReadonlyArray<ServerProvider>,
   disabledSkills: ReadonlyArray<ProviderSkillKey>,
 ): ReadonlyArray<ServerProvider> {

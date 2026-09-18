@@ -100,7 +100,7 @@ export function pxpipeSpawnEnvironment(settings: PxpipeSidecarSettings): Record<
   return env;
 }
 
-export const make = Effect.fn("sidecar.pxpipe.make")(function* () {
+const make = Effect.fn("sidecar.pxpipe.make")(function* () {
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const fs = yield* FileSystem.FileSystem;

@@ -245,7 +245,7 @@ const installPxpipe = Effect.fn("sidecar.pxpipe.ensure_installed")(function* (
   );
 });
 
-export const ensurePxpipeInstalled = (input: PxpipeInstallInput) =>
+const ensurePxpipeInstalled = (input: PxpipeInstallInput) =>
   pxpipeCacheLock.withPermit(installPxpipe(input));
 
 /**
