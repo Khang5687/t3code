@@ -57,8 +57,12 @@ does two things:
 2. Rebases `fork-main` onto `upstream/main` in the runner's throwaway checkout
    as a dry run. It never pushes `fork-main`.
 
-Trigger it by hand from the Actions tab, or with
-`gh workflow run fork-sync.yml -R Khang5687/t3code`.
+Neither trigger fires yet. GitHub registers workflows from the default branch
+and runs both `schedule` and `workflow_dispatch` against it, and this file lives
+only on `fork-main` while the fork's default branch is `main`. `gh workflow run
+fork-sync.yml -R Khang5687/t3code` answers 404 today. Point the default branch
+at `fork-main` to turn the nightly on; until then run `scripts/fork/sync.sh`
+locally.
 
 It needs `contents: write` to push the mirror and `issues: write` to file the
 conflict issue. Both are declared in the workflow and satisfied by the default
