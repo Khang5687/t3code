@@ -4,11 +4,14 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canRemovePxpipeCache,
   canStopPxpipe,
+  describePxpipeStatsNote,
   describePxpipeStatus,
   formatModelAllowlist,
+  isInvalidSidecarEnvironmentName,
   parseModelAllowlist,
   publishableSidecarEnvironment,
   pxpipeBaseUrl,
+  pxpipeRoutingActive,
   pxpipeRoutingOverride,
   pxpipeRoutingTrouble,
   readPxpipeStats,
@@ -224,6 +227,87 @@ describe("pxpipeRoutingOverride", () => {
         { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
       ]),
     ).toContain("this instance sets ANTHROPIC_BASE_URL itself");
+  });
+});
+
+describe("pxpipeRoutingActive", () => {
+  const ownBaseUrl = [
+    { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+  ];
+
+  it("is active only when the switch is on and nothing overrides the base URL", () => {
+    expect(pxpipeRoutingActive({ routeThroughPxpipe: true }, [])).toBe(true);
+    expect(pxpipeRoutingActive({ routeThroughPxpipe: true }, undefined)).toBe(true);
+    expect(pxpipeRoutingActive({ routeThroughPxpipe: false }, [])).toBe(false);
+  });
+
+  // The instance card says "Routing inactive" for this case, so nothing else may
+  // claim the sidecar's health decides its turns.
+  it("is inactive when the instance sets its own base URL", () => {
+    expect(pxpipeRoutingActive({ routeThroughPxpipe: true }, ownBaseUrl)).toBe(false);
+  });
+
+  it("draws no trouble dot for an instance the sidecar never serves", () => {
+    expect(
+      pxpipeRoutingTrouble(
+        pxpipeRoutingActive({ routeThroughPxpipe: true }, ownBaseUrl),
+        state({ status: "failed" }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("isInvalidSidecarEnvironmentName", () => {
+  it("flags a committed name that is not a variable name", () => {
+    expect(isInvalidSidecarEnvironmentName("2BAD")).toBe(true);
+    expect(isInvalidSidecarEnvironmentName("HAS SPACE")).toBe(true);
+  });
+
+  it("leaves a usable name, and a row not typed into yet, unflagged", () => {
+    expect(isInvalidSidecarEnvironmentName("HOST")).toBe(false);
+    expect(isInvalidSidecarEnvironmentName("_x1")).toBe(false);
+    expect(isInvalidSidecarEnvironmentName("   ")).toBe(false);
+    expect(isInvalidSidecarEnvironmentName("")).toBe(false);
+  });
+});
+
+describe("describePxpipeStatsNote", () => {
+  const stats = readPxpipeStats({ requests: 802, compression_enabled: true });
+
+  it("says nothing answers when the proxy gave nothing back", () => {
+    expect(describePxpipeStatsNote(state(), null)).toBe(
+      "Nothing is answering on the proxy port yet.",
+    );
+  });
+
+  // Figures plus a status of Off is the case that misleads: a routed turn still
+  // fails, because the preflight wants a healthy sidecar.
+  it("disowns figures from a proxy T3 Code is not supervising", () => {
+    for (const status of ["disabled", "stopped", "unhealthy", "failed"] as const) {
+      expect([status, describePxpipeStatsNote(state({ status }), stats)]).toEqual([
+        status,
+        "Something is answering on this port that T3 Code is not supervising, so these figures are not the sidecar's. Routed turns keep failing until the sidecar itself is running.",
+      ]);
+    }
+  });
+
+  it("owns the figures once the sidecar is running, adopted or starting", () => {
+    expect(describePxpipeStatsNote(state({ status: "healthy" }), stats)).toBeNull();
+    expect(describePxpipeStatsNote(state({ status: "starting" }), stats)).toBeNull();
+    expect(describePxpipeStatsNote(state({ adopted: true, status: "stopped" }), stats)).toBeNull();
+  });
+
+  it("stays quiet before the first state arrives rather than disowning figures", () => {
+    expect(describePxpipeStatsNote(null, stats)).toBeNull();
+  });
+
+  it("calls out pass-through on a sidecar that is running with compression off", () => {
+    expect(
+      describePxpipeStatsNote(
+        state({ status: "healthy" }),
+        readPxpipeStats({ compression_enabled: false }),
+      ),
+    ).toBe("Compression is off, so pxpipe is passing requests through.");
   });
 });
 

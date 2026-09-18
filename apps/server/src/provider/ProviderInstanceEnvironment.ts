@@ -21,8 +21,12 @@ export function mergeProviderInstanceEnvironment(
   return next;
 }
 
-/** The variable a routed instance points at the sidecar. */
-const ANTHROPIC_BASE_URL = "ANTHROPIC_BASE_URL";
+/**
+ * The variable a routed instance points at the sidecar. Exported because
+ * whether an instance is really routed is decided by whether this is already
+ * set, and the turn preflight has to reach the same verdict as the merge below.
+ */
+export const ANTHROPIC_BASE_URL = "ANTHROPIC_BASE_URL";
 
 /**
  * Point a routed instance's environment at the pxpipe sidecar (ADR 0004), or
