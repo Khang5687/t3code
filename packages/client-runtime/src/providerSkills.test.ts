@@ -13,6 +13,8 @@ import {
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
   getVisibleProviderSkills,
+  providerMayStillInvokeSkill,
+  providerSkillDirectory,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
   resolveProviderSkillSourceKind,
@@ -303,5 +305,38 @@ describe("workspace provider snapshots", () => {
   it("keeps the machine snapshot before this cwd has a provider snapshot", () => {
     expect(resolveProviderSkillsForCwd(provider, "/workspace/project-b")).toEqual(provider.skills);
     expect(resolveProviderSlashCommandsForCwd(provider, null)).toEqual(provider.slashCommands);
+  });
+});
+
+describe("providerSkillDirectory", () => {
+  it("drops the SKILL.md a provider reports", () => {
+    expect(providerSkillDirectory({ path: "/home/dev/.claude/skills/review/SKILL.md" })).toBe(
+      "/home/dev/.claude/skills/review",
+    );
+    expect(
+      providerSkillDirectory({ path: "C:\\Users\\dev\\.claude\\skills\\review\\Skill.md" }),
+    ).toBe("C:\\Users\\dev\\.claude\\skills\\review");
+  });
+
+  it("keeps a path that already names the folder", () => {
+    expect(providerSkillDirectory({ path: "/home/dev/.config/opencode/skill/review" })).toBe(
+      "/home/dev/.config/opencode/skill/review",
+    );
+  });
+});
+
+describe("providerMayStillInvokeSkill", () => {
+  it("says yes for a skill the provider loads from its own root", () => {
+    expect(providerMayStillInvokeSkill({ enabled: true })).toBe(true);
+    // The T3 Code fold reports its own switch this way; the provider is untouched.
+    expect(providerMayStillInvokeSkill({ enabled: false, disabledBy: "settings" })).toBe(true);
+  });
+
+  it("says no once the provider itself switched the skill off", () => {
+    expect(providerMayStillInvokeSkill({ enabled: false, disabledBy: "provider" })).toBe(false);
+  });
+
+  it("says no for a skill the provider reserves for manual invocation", () => {
+    expect(providerMayStillInvokeSkill({ enabled: true, userInvocationOnly: true })).toBe(false);
   });
 });

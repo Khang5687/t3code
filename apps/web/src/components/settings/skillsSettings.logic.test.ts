@@ -83,6 +83,67 @@ describe("buildSkillsSettingsModel", () => {
     expect(model.providers[0]?.sources[0]?.rows).toHaveLength(1);
   });
 
+  it("lists the other folders one switch covers", () => {
+    const model = buildSkillsSettingsModel({
+      providers: [
+        {
+          id: "claude-1",
+          label: "Claude",
+          skills: [
+            skill({ name: "review" }),
+            skill({ name: "review", path: "/home/dev/.cursor/skills/review/SKILL.md" }),
+          ],
+        },
+        {
+          id: "cursor-1",
+          label: "Cursor",
+          skills: [skill({ name: "review", path: "/home/dev/.agents/skills/review/SKILL.md" })],
+        },
+      ],
+      disabledSkills: [],
+    });
+
+    expect(model.providers[0]?.sources[0]?.rows[0]).toMatchObject({
+      directory: "/home/dev/.claude/skills/review",
+      alsoIn: ["/home/dev/.cursor/skills/review", "/home/dev/.agents/skills/review"],
+    });
+    expect(model.providers[1]?.sources[0]?.rows[0]?.alsoIn).toEqual([
+      "/home/dev/.claude/skills/review",
+      "/home/dev/.cursor/skills/review",
+    ]);
+  });
+
+  it("leaves alsoIn empty for a skill only one folder holds", () => {
+    const model = buildSkillsSettingsModel({
+      providers: providers([skill({ name: "review" })]),
+      disabledSkills: [],
+    });
+
+    expect(model.providers[0]?.sources[0]?.rows[0]?.alsoIn).toEqual([]);
+  });
+
+  it("marks a row the provider keeps loading even while T3 Code hides it", () => {
+    const model = buildSkillsSettingsModel({
+      providers: providers([skill({ name: "review" }), skill({ name: "audit" })]),
+      disabledSkills: [{ source: "personal", name: "review" }] as ProviderSkillKey[],
+    });
+
+    const rows = model.providers[0]?.sources[0]?.rows ?? [];
+    expect(rows.map((row) => [row.title, row.disabled, row.providerMayStillInvoke])).toEqual([
+      ["Audit", false, true],
+      ["Review", true, true],
+    ]);
+  });
+
+  it("clears the flag for a skill the provider reserves for manual invocation", () => {
+    const model = buildSkillsSettingsModel({
+      providers: providers([skill({ name: "review", userInvocationOnly: true })]),
+      disabledSkills: [{ source: "personal", name: "review" }] as ProviderSkillKey[],
+    });
+
+    expect(model.providers[0]?.sources[0]?.rows[0]?.providerMayStillInvoke).toBe(false);
+  });
+
   it("filters rows by the query and says rows were hidden", () => {
     const model = buildSkillsSettingsModel({
       providers: providers([skill({ name: "review" }), skill({ name: "deploy" })]),

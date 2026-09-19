@@ -2,6 +2,8 @@ import type { ProviderSkillKey, ServerProviderSkill } from "@t3tools/contracts";
 import {
   formatProviderSkillDisplayName,
   formatProviderSkillSourceLabel,
+  providerMayStillInvokeSkill,
+  providerSkillDirectory,
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
@@ -28,9 +30,23 @@ export interface SkillsSettingsRow {
   readonly title: string;
   readonly description: string | undefined;
   readonly path: string;
+  /** The folder to delete to stop the provider loading this copy of the skill. */
+  readonly directory: string;
   readonly disabled: boolean;
   /** The provider's own configuration switched it off, so the switch is locked. */
   readonly disabledByProvider: boolean;
+  /**
+   * Switching this row off hides the skill in T3 Code but leaves the provider
+   * loading it, so the agent can still start it. See
+   * `providerMayStillInvokeSkill`.
+   */
+  readonly providerMayStillInvoke: boolean;
+  /**
+   * The other folders holding a skill with this same key, across every provider
+   * and workspace snapshot. One switch covers all of them, so the row says which
+   * ones it collapsed.
+   */
+  readonly alsoIn: ReadonlyArray<string>;
 }
 
 export interface SkillsSettingsSourceGroup {
@@ -125,6 +141,19 @@ export function buildSkillsSettingsModel(input: {
   const discoveredIds = new Set<string>();
   let hasRows = false;
 
+  // One pass first, because a key's other folders can sit in a provider the row
+  // loop has not reached yet.
+  const directoriesByKey = new Map<string, string[]>();
+  for (const provider of input.providers) {
+    for (const skill of provider.skills) {
+      const id = keyId({ source: resolveProviderSkillSourceKind(skill), name: skill.name });
+      const directory = providerSkillDirectory(skill);
+      const directories = directoriesByKey.get(id);
+      if (!directories) directoriesByKey.set(id, [directory]);
+      else if (!directories.includes(directory)) directories.push(directory);
+    }
+  }
+
   const providers: SkillsSettingsProviderGroup[] = [];
   for (const provider of input.providers) {
     const rowsBySource = new Map<ProviderSkillSourceKind, SkillsSettingsRow[]>();
@@ -154,14 +183,18 @@ export function buildSkillsSettingsModel(input: {
         continue;
       }
       const rows = rowsBySource.get(source) ?? [];
+      const directory = providerSkillDirectory(skill);
       rows.push({
         id: `${provider.id}:${id}`,
         key: { source, name: skill.name.trim() },
         title,
         description,
         path: skill.path,
+        directory,
         disabled: disabledIds.has(id) || !skill.enabled,
         disabledByProvider: !skill.enabled && skill.disabledBy === "provider",
+        providerMayStillInvoke: providerMayStillInvokeSkill(skill),
+        alsoIn: (directoriesByKey.get(id) ?? []).filter((entry) => entry !== directory),
       });
       rowsBySource.set(source, rows);
     }

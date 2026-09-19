@@ -149,6 +149,16 @@ provider. On mobile, both are also available before starting a thread on
 The slash menu also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.
 
+**Settings → Skills** switches a skill off. That hides it from the picker and
+sends a typed `$name` as plain text. Two limits apply:
+
+- T3 Code never writes a provider's own configuration. The provider keeps
+  loading the skill from disk, so the agent can still start it by itself. The
+  row shows the folder to delete when you want the skill gone for good.
+- A skill is identified by its source and its name. One switch covers every copy
+  of that name in the same kind of folder, and every provider that reports it.
+  The row lists the other folders it covers.
+
 Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 

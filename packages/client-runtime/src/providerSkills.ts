@@ -134,3 +134,35 @@ export function resolveProviderSlashCommandsForCwd(
 ): ServerProvider["slashCommands"] {
   return resolveProviderWorkspaceSnapshot(provider, cwd)?.slashCommands ?? provider.slashCommands;
 }
+
+/**
+ * The folder to delete to stop a provider loading a skill. A skill's `path`
+ * names its `SKILL.md`, so the folder around that file is the skill. A provider
+ * that reports the folder itself is left alone.
+ */
+export function providerSkillDirectory(skill: Pick<ServerProviderSkill, "path">): string {
+  const skillPath = skill.path.trim();
+  const separator = Math.max(skillPath.lastIndexOf("/"), skillPath.lastIndexOf("\\"));
+  if (separator <= 0) return skillPath;
+  const base = skillPath.slice(separator + 1).toLowerCase();
+  return base.endsWith(".md") ? skillPath.slice(0, separator) : skillPath;
+}
+
+/**
+ * Whether switching a skill off in T3 Code leaves the provider able to start it
+ * anyway. T3 Code never writes provider configuration, and every root it scans
+ * is a root the provider loads by itself: `<config dir>/skills` and
+ * `<cwd>/.claude/skills` for Claude Code, the `.cursor`, `.agents`, `.codex`
+ * and `.claude` skill folders for Cursor, `.gemini`, `.agents` and `.agent` for
+ * Antigravity, and the catalogs Codex, Grok and OpenCode report about
+ * themselves. The answer is therefore yes for every source kind. Two cases say
+ * no: the provider already switched the skill off, and a skill the provider
+ * reserves for manual invocation (Claude Code's `disable-model-invocation`),
+ * which the agent cannot start on its own.
+ */
+export function providerMayStillInvokeSkill(
+  skill: Pick<ServerProviderSkill, "enabled" | "disabledBy" | "userInvocationOnly">,
+): boolean {
+  if (!skill.enabled && skill.disabledBy === "provider") return false;
+  return skill.userInvocationOnly !== true;
+}

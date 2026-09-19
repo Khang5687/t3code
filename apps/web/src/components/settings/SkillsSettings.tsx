@@ -165,6 +165,17 @@ export function SkillsSettings({
                   <span className="break-all">
                     {row.description ? `${row.description} · ` : null}
                     {row.path}
+                    {row.alsoIn.length > 0 ? (
+                      <span className="mt-0.5 block">
+                        One switch, also in {row.alsoIn.join(", ")}
+                      </span>
+                    ) : null}
+                    {row.disabled && !row.disabledByProvider && row.providerMayStillInvoke ? (
+                      <span className="mt-0.5 block">
+                        Hidden in T3 Code only. {provider.label} may still invoke this skill on its
+                        own. Remove it from {row.directory} to fully disable it.
+                      </span>
+                    ) : null}
                   </span>
                 }
                 control={
@@ -173,7 +184,13 @@ export function SkillsSettings({
                       <span className="text-xs text-muted-foreground">Disabled by provider</span>
                     ) : null}
                     <Switch
-                      aria-label={`Enable ${row.title}`}
+                      // The switch only hides an auto-loaded skill, so it must
+                      // not read as a full disable.
+                      aria-label={
+                        row.providerMayStillInvoke
+                          ? `Show ${row.title} in T3 Code`
+                          : `Enable ${row.title}`
+                      }
                       checked={!row.disabled}
                       disabled={readOnly || row.disabledByProvider}
                       onCheckedChange={(enabled) => setDisabled(row.key, !enabled)}
