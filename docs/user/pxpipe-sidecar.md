@@ -45,9 +45,16 @@ treats a custom endpoint as a signal to switch off its first-party client
 features. On a routed instance, `/remote-control` and claude.ai connectors stop
 working. Unrouted instances keep both.
 
-pxpipe rewrites request bodies, so a routed instance can lose Claude
-prompt-cache hits and pay full price for a turn it would otherwise have read
-from cache.
+Prompt caching keeps working. pxpipe only rewrites a request when the model it
+names is one of its imaging models, and it moves the cache markers along with
+the content they cover, so a routed conversation still reads its prefix from
+cache turn after turn. Leave **Imaging models** empty and pxpipe images only
+the models on its own list, which today means Claude Fable 5; every other Claude
+model is forwarded unchanged.
+
+The one thing routing costs you is a single cache write when you flip the
+switch. A routed turn and an unrouted turn send different requests, so the first
+turn after you change the switch pays to build its cache again.
 
 Use a second Claude instance if you want both: route one, leave the other
 direct, and switch a thread between them.
