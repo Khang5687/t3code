@@ -34,6 +34,7 @@ it("isolates Claude capability probes without dropping workspace setting sources
       FORCE_CODE_TERMINAL: "1",
     },
     cwd: "/workspace/project",
+    firstPartyRemoteFeatures: false,
   });
 
   assert.deepEqual(options.mcpServers, {});
@@ -50,6 +51,25 @@ it("isolates Claude capability probes without dropping workspace setting sources
   assert.equal(options.env?.FORCE_CODE_TERMINAL, undefined);
   assert.equal(options.env?.CLAUDE_CODE_AUTO_CONNECT_IDE, "0");
   assert.equal(options.env?.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, "1");
+  assert.deepEqual(options.managedSettings, {
+    disableRemoteControl: true,
+    disableClaudeAiConnectors: true,
+  });
+});
+
+// Fork-only. The probe loads the user's filesystem settings, so without the
+// policy tier it would be the one Claude process a gated instance still
+// registers with claude.ai.
+it("hands the first-party policy tier back to an instance that opted in", () => {
+  const options = buildClaudeCapabilitiesProbeQueryOptions({
+    executablePath: "/usr/bin/claude",
+    abortController: new AbortController(),
+    environment: {},
+    cwd: undefined,
+    firstPartyRemoteFeatures: true,
+  });
+
+  assert.equal(options.managedSettings, undefined);
 });
 
 it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {

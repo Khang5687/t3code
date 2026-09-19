@@ -107,8 +107,12 @@ describe("applyPxpipeRouting", () => {
 });
 
 describe("applyClaudeFirstPartyGates", () => {
+  const configured = (value: string) => [
+    { name: "ENABLE_CLAUDEAI_MCP_SERVERS", value, sensitive: false },
+  ];
+
   it("closes the connectors gate on an instance that has not opted in", () => {
-    expect(applyClaudeFirstPartyGates({ PATH: "/bin" }, false)).toEqual({
+    expect(applyClaudeFirstPartyGates({ PATH: "/bin" }, false, undefined)).toEqual({
       PATH: "/bin",
       ENABLE_CLAUDEAI_MCP_SERVERS: "0",
     });
@@ -117,23 +121,38 @@ describe("applyClaudeFirstPartyGates", () => {
   it("leaves an opted-in instance untouched", () => {
     const env = { PATH: "/bin" };
 
-    expect(applyClaudeFirstPartyGates(env, true)).toBe(env);
+    expect(applyClaudeFirstPartyGates(env, true, undefined)).toBe(env);
   });
 
-  it("keeps a value the instance sets by hand", () => {
-    const env = { ENABLE_CLAUDEAI_MCP_SERVERS: "1" };
+  it("keeps a value the instance sets in its own environment list", () => {
+    const env = mergeProviderInstanceEnvironment(configured("1"), { PATH: "/bin" });
 
-    expect(applyClaudeFirstPartyGates(env, false)).toBe(env);
+    expect(applyClaudeFirstPartyGates(env, false, configured("1"))).toBe(env);
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("1");
   });
 
-  it("keeps a value the child inherits from the server process", () => {
-    const env = { PATH: "/bin" };
+  // The shell that launched T3 Code chose nothing per instance, and
+  // `mergeProviderInstanceEnvironment` seeds from `process.env` — so reading
+  // the verdict off the merged environment would open connectors everywhere
+  // while the instance card still said off.
+  it("ignores an ambient value inherited from the server process", () => {
+    expect(
+      applyClaudeFirstPartyGates({ ENABLE_CLAUDEAI_MCP_SERVERS: "1" }, false, undefined),
+    ).toEqual({ ENABLE_CLAUDEAI_MCP_SERVERS: "0" });
+  });
 
-    expect(applyClaudeFirstPartyGates(env, false, { ENABLE_CLAUDEAI_MCP_SERVERS: "1" })).toBe(env);
+  it("ignores an ambient value even when the instance configures something else", () => {
+    expect(
+      applyClaudeFirstPartyGates({ ENABLE_CLAUDEAI_MCP_SERVERS: "1" }, false, [
+        { name: "CLAUDE_CONFIG_DIR", value: "~/.claude_work", sensitive: false },
+      ]),
+    ).toEqual({ ENABLE_CLAUDEAI_MCP_SERVERS: "0" });
   });
 
   it("gates a routed instance too, so the two rules compose", () => {
-    expect(applyClaudeFirstPartyGates(applyPxpipeRouting({ PATH: "/bin" }, 47821), false)).toEqual({
+    expect(
+      applyClaudeFirstPartyGates(applyPxpipeRouting({ PATH: "/bin" }, 47821), false, undefined),
+    ).toEqual({
       PATH: "/bin",
       ANTHROPIC_BASE_URL: "http://127.0.0.1:47821",
       ENABLE_CLAUDEAI_MCP_SERVERS: "0",
@@ -141,7 +160,9 @@ describe("applyClaudeFirstPartyGates", () => {
   });
 
   it("leaves an opted-in routed instance to pxpipe, which closes both gates anyway", () => {
-    expect(applyClaudeFirstPartyGates(applyPxpipeRouting({ PATH: "/bin" }, 47821), true)).toEqual({
+    expect(
+      applyClaudeFirstPartyGates(applyPxpipeRouting({ PATH: "/bin" }, 47821), true, undefined),
+    ).toEqual({
       PATH: "/bin",
       ANTHROPIC_BASE_URL: "http://127.0.0.1:47821",
     });

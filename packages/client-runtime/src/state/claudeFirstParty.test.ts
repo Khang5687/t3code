@@ -40,6 +40,30 @@ describe("claudeFirstPartyFeaturesNote", () => {
       "disableRemoteControl",
     );
   });
+
+  // Claude Code drops a spawning parent's policy tier whole when the machine
+  // already has an IT-managed one, so the switch closes connectors (an env var)
+  // and nothing else.
+  it("says Remote Control is not refused on an IT-managed machine", () => {
+    const note = claudeFirstPartyFeaturesNote({
+      allowed: false,
+      routedThroughPxpipe: false,
+      managedSettingsPresent: true,
+    });
+
+    expect(note).toContain("IT-managed Claude settings file");
+    expect(note).toContain("connectors are still off");
+  });
+
+  it("keeps the routed message on an IT-managed machine, where routing still closes both", () => {
+    expect(
+      claudeFirstPartyFeaturesNote({
+        allowed: false,
+        routedThroughPxpipe: true,
+        managedSettingsPresent: true,
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("claudeFirstPartyFeaturesStatus", () => {
@@ -50,6 +74,18 @@ describe("claudeFirstPartyFeaturesStatus", () => {
   ])("reads allowed=$allowed routed=$routedThroughPxpipe as $expected", (input) => {
     expect(claudeFirstPartyFeaturesStatus(input)).toBe(
       `Remote Control and claude.ai connectors: ${input.expected}`,
+    );
+  });
+
+  it("splits the two gates apart on an IT-managed machine", () => {
+    expect(
+      claudeFirstPartyFeaturesStatus({
+        allowed: false,
+        routedThroughPxpipe: false,
+        managedSettingsPresent: true,
+      }),
+    ).toBe(
+      "claude.ai connectors: off. Remote Control: not refused, this machine has IT-managed Claude settings",
     );
   });
 });

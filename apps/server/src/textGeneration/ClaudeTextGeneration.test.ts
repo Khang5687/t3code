@@ -407,6 +407,56 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
       ),
   );
 
+  // Fork-only. `--settings` is the flag tier the user's own settings can argue
+  // with; only `--managed-settings` carries `disableRemoteControl`, so without
+  // it a gated instance would still register a claude.ai session to write a
+  // commit message.
+  it.effect("sends the first-party policy tier with a gated instance's metadata prompts", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({ structured_output: { branch: "call-script" } }),
+        argsMustContain:
+          '--managed-settings {"disableRemoteControl":true,"disableClaudeAiConnectors":true}',
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateBranchName({
+            cwd: process.cwd(),
+            message: "/call-script",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            },
+          });
+
+          expect(generated.branch).toBe("call-script");
+        }),
+    ),
+  );
+
+  it.effect("leaves the policy tier off an instance that opted into first-party features", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({ structured_output: { branch: "call-script" } }),
+        claudeConfig: { firstPartyRemoteFeatures: true },
+        argsMustNotContain: "--managed-settings",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateBranchName({
+            cwd: process.cwd(),
+            message: "/call-script",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            },
+          });
+
+          expect(generated.branch).toBe("call-script");
+        }),
+    ),
+  );
+
   it.effect("generates branch names from skill prompts without executable capabilities", () =>
     withFakeClaudeEnv(
       {

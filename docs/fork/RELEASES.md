@@ -14,9 +14,11 @@ Remote Control and claude.ai connectors, and terminals on that instance refuse
 connectors. A `claude` started by hand in a terminal still offers Remote
 Control — Claude Code has no environment variable for it — so the instance card
 and [Providers > Claude](../user/providers-claude.md#keep-claudeai-out-of-this-machine)
-say so and name the fallback. Routing through pxpipe already closed both gates;
-the card says that too. Mobile shows each Claude instance's gate read-only under
-**Settings > pxpipe**.
+say so and name the fallback. On a machine an IT department manages, Claude Code
+drops T3 Code's policy whole and Remote Control stays available; the card and the
+guide say that too rather than drawing a gate that is not closed. Routing through
+pxpipe already closed both gates. Mobile shows each Claude instance's gate
+read-only under **Settings > pxpipe**.
 
 ## v0.0.42-fork.1
 

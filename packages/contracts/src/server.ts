@@ -243,6 +243,11 @@ export const ServerProvider = Schema.Struct({
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   updateState: Schema.optionalKey(ServerProviderUpdateState),
+  // Fork-only, Claude only. Set when the environment's machine carries an
+  // IT-managed Claude settings tier, which makes Claude Code drop the policy
+  // T3 Code sends with each session — so the first-party gates the instance
+  // card draws are not actually closed. Absent everywhere else.
+  claudeManagedSettings: Schema.optional(Schema.Boolean),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 

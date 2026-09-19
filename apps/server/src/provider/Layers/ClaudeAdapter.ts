@@ -25,6 +25,7 @@ import {
   type SDKUserMessage,
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { CLAUDE_FIRST_PARTY_LOCKDOWN } from "../ProviderInstanceEnvironment.ts";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { type ClaudeScopedLimitNames, claudeRateLimitEventToUpdate } from "./claudeUsageLimits.ts";
@@ -1548,22 +1549,6 @@ const CLAUDE_SETTING_SOURCES = [
   "project",
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
-
-/**
- * Fork-only. What an instance without `firstPartyRemoteFeatures` sends as the
- * SDK's policy tier, which outranks the user, project and local settings the
- * session also loads — so a Claude account shared with other people cannot
- * reach this machine through claude.ai.
- *
- * `managedSettings` is the only lever that closes Remote Control; both keys
- * survive the SDK's restrictive-only filter. The companion env var set in
- * `applyClaudeFirstPartyGates` covers connectors on the paths that do not go
- * through `query()`, including T3 terminals.
- */
-const CLAUDE_FIRST_PARTY_LOCKDOWN = {
-  disableRemoteControl: true,
-  disableClaudeAiConnectors: true,
-} as const satisfies NonNullable<ClaudeQueryOptions["managedSettings"]>;
 
 function buildPromptText(
   input: ProviderSendTurnInput,

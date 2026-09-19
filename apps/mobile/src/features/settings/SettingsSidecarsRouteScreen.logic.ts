@@ -72,6 +72,7 @@ export function pxpipeRoutableInstances(
     readonly instanceId: ProviderInstanceId;
     readonly driver: ProviderDriverKindType;
     readonly displayName?: string | undefined;
+    readonly claudeManagedSettings?: boolean | undefined;
   }>,
   settings: ServerSettings,
 ): ReadonlyArray<PxpipeRoutableInstance> {
@@ -84,6 +85,7 @@ export function pxpipeRoutableInstances(
       // process also wins, and no client can see that.
       const environment: ReadonlyArray<SidecarEnvironmentVariable> | undefined =
         settings.providerInstances[provider.instanceId]?.environment;
+      const inactiveReason = pxpipeRoutingOverride(routed, environment);
       return {
         instanceId: provider.instanceId,
         label:
@@ -91,13 +93,16 @@ export function pxpipeRoutableInstances(
           PROVIDER_DISPLAY_NAMES[provider.driver] ??
           String(provider.instanceId),
         routed,
-        inactiveReason: pxpipeRoutingOverride(routed, environment),
+        inactiveReason,
         remoteFeaturesStatus: claudeFirstPartyFeaturesStatus({
           allowed: readFirstPartyRemoteFeatures(
             settings.providerInstances[provider.instanceId]?.config ??
               settings.providers.claudeAgent,
           ),
-          routedThroughPxpipe: routed,
+          // The switch alone is not routing; an overridden base URL means this
+          // instance gets none of what routing would close.
+          routedThroughPxpipe: routed && inactiveReason === null,
+          managedSettingsPresent: provider.claudeManagedSettings,
         }),
       };
     });

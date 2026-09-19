@@ -62,6 +62,38 @@ describe("pxpipeRoutableInstances", () => {
     ]);
   });
 
+  // The switch is on but a hand-set ANTHROPIC_BASE_URL wins, so none of what
+  // routing would close is closed. Reading the switch instead of the verdict
+  // made the row claim routing had already shut both gates.
+  it("does not credit routing on an instance whose base URL overrides it", () => {
+    const rows = pxpipeRoutableInstances(
+      [{ instanceId: workClaude, driver: claudeDriver }],
+      settings({
+        providerInstances: instances({
+          [workClaude]: {
+            driver: claudeDriver,
+            config: { routeThroughPxpipe: true, firstPartyRemoteFeatures: true },
+            environment: [
+              { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+            ],
+          },
+        }),
+      }),
+    );
+
+    expect(rows[0]?.inactiveReason).toContain("Routing is inactive");
+    expect(rows[0]?.remoteFeaturesStatus).toBe("Remote Control and claude.ai connectors: allowed");
+  });
+
+  it("passes the server's IT-managed settings verdict through to the status", () => {
+    const rows = pxpipeRoutableInstances(
+      [{ instanceId: defaultClaude, driver: claudeDriver, claudeManagedSettings: true }],
+      settings(),
+    );
+
+    expect(rows[0]?.remoteFeaturesStatus).toContain("IT-managed Claude settings");
+  });
+
   it("reads the legacy mirror for a default slot that has no instance entry", () => {
     const rows = pxpipeRoutableInstances(
       [{ instanceId: defaultClaude, driver: claudeDriver }],

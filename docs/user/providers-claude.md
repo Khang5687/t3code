@@ -132,5 +132,11 @@ true` in your own Claude settings to close that too, or route the instance
 through pxpipe, which stops Claude Code treating the session as first-party at
 all.
 
+If the environment's machine is managed by an IT department, the instance says
+so: Claude Code ignores the policy T3 Code sends whenever a managed settings
+file is installed, so Remote Control stays available there. Connectors are still
+off. Ask whoever manages the machine to set `disableRemoteControl` in the
+managed settings, or route the instance through pxpipe.
+
 Turn the switch on if you want `/remote-control` and claude.ai connectors back.
 It has no effect while the instance routes through pxpipe.

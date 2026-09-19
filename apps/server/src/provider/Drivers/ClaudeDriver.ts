@@ -16,6 +16,7 @@ import {
   ClaudeSettings,
   DEFAULT_PXPIPE_SIDECAR_PORT,
   ProviderDriverKind,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
@@ -50,6 +51,8 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
+import { hasClaudeManagedSettings } from "../claudeManagedSettings.ts";
+import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import {
   applyClaudeFirstPartyGates,
   applyPxpipeRouting,
@@ -140,6 +143,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const processEnv = applyClaudeFirstPartyGates(
         applyPxpipeRouting(mergeProviderInstanceEnvironment(environment), pxpipePort),
         config.firstPartyRemoteFeatures,
+        environment,
+      );
+      // Fork-only. Read once per instance build: an administrator does not
+      // install policy mid-session, and every Claude snapshot this instance
+      // publishes has to carry the same answer.
+      const managedSettingsPresent = yield* hasClaudeManagedSettings((candidate) =>
+        fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false)),
       );
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -161,13 +171,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         ),
       );
       const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig);
-      const stampIdentity = withInstanceIdentity({
+      const stampInstance = withInstanceIdentity({
         instanceId,
         driverKind: DRIVER_KIND,
         displayName,
         accentColor,
         continuationGroupKey,
       });
+      // Fork-only. Rides on every snapshot rather than a probe result, so the
+      // pending snapshot clients render first already tells them the gate is
+      // not being applied.
+      const stampIdentity = (draft: ServerProviderDraft): ServerProvider =>
+        managedSettingsPresent
+          ? { ...stampInstance(draft), claudeManagedSettings: true }
+          : stampInstance(draft);
 
       // One per instance: the status probe writes the model-scoped bucket
       // names it saw, the adapter reads them to place turn-driven events.

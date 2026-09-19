@@ -49,6 +49,7 @@ import {
   scopeClaudeModelCatalog,
 } from "../provider/ClaudeModelCatalog.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
+import { CLAUDE_FIRST_PARTY_LOCKDOWN } from "../provider/ProviderInstanceEnvironment.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
 
@@ -183,6 +184,18 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       settings,
       "Failed to encode Claude CLI settings.",
     );
+    // Fork-only. `--settings` is the flag tier, which the user's own settings
+    // can still argue with; `--managed-settings` is the policy tier the SDK
+    // sends as `managedSettings` for a thread. Same object, same guarantee, so
+    // a gated instance does not register a claude.ai session just to name a
+    // branch.
+    const managedSettingsJson = claudeSettings.firstPartyRemoteFeatures
+      ? null
+      : yield* encodeJsonForOperation(
+          operation,
+          CLAUDE_FIRST_PARTY_LOCKDOWN,
+          "Failed to encode Claude CLI policy settings.",
+        );
 
     const runClaudeCommand = Effect.fn("runClaudeJson.runClaudeCommand")(function* () {
       // Titles need only the supplied prompt, not configuration from the checkout.
@@ -209,6 +222,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           ...(cliEffort ? ["--effort", cliEffort] : []),
           "--settings",
           settingsJson,
+          ...(managedSettingsJson ? ["--managed-settings", managedSettingsJson] : []),
           // Metadata prompts need no executable capabilities, even when they contain a skill name.
           "--tools",
           "",

@@ -1402,7 +1402,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
       resolved = applyClaudeFirstPartyGates(
         resolved,
         config.value.firstPartyRemoteFeatures,
-        input.baseEnv ?? process.env,
+        instance.environment,
       );
     }
   }

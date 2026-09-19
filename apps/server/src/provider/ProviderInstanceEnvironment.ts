@@ -87,21 +87,44 @@ export const ENABLE_CLAUDEAI_MCP_SERVERS = "ENABLE_CLAUDEAI_MCP_SERVERS";
  * still offers it unless the instance routes through pxpipe (ADR 0004) or the
  * user sets `disableRemoteControl` in their own Claude settings.
  *
- * An explicit value wins, from the instance's own environment list (already
- * merged into `env`) or inherited by the child (`inheritedEnv`), for the same
- * reason routing yields to a hand-set `ANTHROPIC_BASE_URL`.
+ * Only a value from `configuredEnvironment` — the instance's own, user-authored
+ * variable list — wins, and this is where the gate parts company with routing.
+ * `env` is seeded from `process.env`, so reading the verdict off it would let
+ * an `ENABLE_CLAUDEAI_MCP_SERVERS=1` that happened to be exported in the shell
+ * that launched T3 Code silently open connectors on every Claude instance while
+ * the card still says off. Nobody chose that per instance, so it does not win.
+ * The instance's own entry is already merged into `env`, so returning `env`
+ * untouched keeps the value the user asked for.
  */
 export function applyClaudeFirstPartyGates(
   env: NodeJS.ProcessEnv,
   allowed: boolean,
-  inheritedEnv: NodeJS.ProcessEnv = {},
+  configuredEnvironment: ProviderInstanceEnvironment | undefined,
 ): NodeJS.ProcessEnv {
   if (allowed) return env;
-  if (
-    env[ENABLE_CLAUDEAI_MCP_SERVERS] !== undefined ||
-    inheritedEnv[ENABLE_CLAUDEAI_MCP_SERVERS] !== undefined
-  ) {
+  if (configuredEnvironment?.some((variable) => variable.name === ENABLE_CLAUDEAI_MCP_SERVERS)) {
     return env;
   }
   return { ...env, [ENABLE_CLAUDEAI_MCP_SERVERS]: "0" };
 }
+
+/**
+ * Fork-only. What an instance without `firstPartyRemoteFeatures` sends as
+ * Claude Code's policy tier, which outranks the user, project and local
+ * settings a session also loads. Both keys survive the SDK's restrictive-only
+ * filter.
+ *
+ * `managedSettings` in the SDK's `query()` options, `--managed-settings` on the
+ * CLI: the same tier by two names, so SDK sessions, the capabilities probe and
+ * text generation all say it. It lives here beside the connectors env var
+ * because the two are halves of one gate — the env var is the only switch
+ * Claude Code offers for connectors, and this is the only one for Remote
+ * Control.
+ *
+ * It does not always land: see `claudeManagedSettings.ts` for the IT-managed
+ * settings tier that outranks it.
+ */
+export const CLAUDE_FIRST_PARTY_LOCKDOWN = {
+  disableRemoteControl: true,
+  disableClaudeAiConnectors: true,
+} as const;

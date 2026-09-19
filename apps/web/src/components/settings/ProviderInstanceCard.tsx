@@ -450,7 +450,12 @@ export function ProviderInstanceCard({
   // what routing already covers and what a hand-started `claude` still has.
   const firstPartyNote = claudeFirstPartyFeaturesNote({
     allowed: readFirstPartyRemoteFeatures(instance.config),
-    routedThroughPxpipe,
+    // The switch on its own is not routing: a hand-set ANTHROPIC_BASE_URL wins,
+    // and `pxpipeRoutingNote` is how that state is already being reported. Ask
+    // the same question both rows answer, or the card says routing is inactive
+    // and in the next breath that routing closes both gates.
+    routedThroughPxpipe: routedThroughPxpipe && pxpipeRoutingNote === null,
+    managedSettingsPresent: liveProvider?.claudeManagedSettings,
   });
   // A locally disabled provider reads "Disabled" with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.

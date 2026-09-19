@@ -32,6 +32,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { CLAUDE_FIRST_PARTY_LOCKDOWN } from "../ProviderInstanceEnvironment.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
@@ -187,12 +188,19 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly abortController: AbortController;
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string | undefined;
+  /** Fork-only. The instance's `firstPartyRemoteFeatures`. */
+  readonly firstPartyRemoteFeatures: boolean;
 }): ClaudeQueryOptions {
   return {
     persistSession: false,
     pathToClaudeCodeExecutable: input.executablePath,
     abortController: input.abortController,
     settingSources: [...CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES],
+    // Fork-only. The probe loads the user's filesystem settings, so a gated
+    // instance needs the policy tier that outranks them here too — otherwise
+    // this health check is the one Claude process that would still register
+    // with claude.ai.
+    ...(input.firstPartyRemoteFeatures ? {} : { managedSettings: CLAUDE_FIRST_PARTY_LOCKDOWN }),
     // The probe keeps filesystem setting sources for slash-command discovery,
     // but must not run the user's hooks: it fires every few minutes, so
     // SessionStart hooks would run on every health check.
@@ -353,6 +361,7 @@ const probeClaudeCapabilities = (
           abortController: abort,
           environment: claudeEnvironment,
           cwd,
+          firstPartyRemoteFeatures: claudeSettings.firstPartyRemoteFeatures,
         }),
       });
       const init = await q.initializationResult();
