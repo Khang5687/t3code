@@ -15,7 +15,19 @@ import {
   LOOPBACK_LISTEN_ADDRESS,
 } from "@t3tools/tailscale";
 
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+
 import type { NetworkInterfaces } from "./DesktopNetworkInterfaces.ts";
+
+/** Mirrors the server: WSL kernels name themselves in the release string; unreadable means not WSL. */
+const readOsRelease = (path: string): string | undefined => {
+  try {
+    return NodeFS.readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+};
 
 const normalizeOptionalHost = (value: string | undefined): string | undefined => {
   const normalized = value?.trim();
@@ -60,7 +72,7 @@ export const resolveDesktopExposure = (input: {
   const resolved = resolveListenAddresses(
     requested,
     input.networkInterfaces,
-    detectWslNetworking(input.networkInterfaces, process.env),
+    detectWslNetworking(input.networkInterfaces, process.env, readOsRelease),
   );
   const tailnetSelected = requested.kinds.includes("tailnet");
   // Serve and the tailnet endpoints need a real tailnet address, not just the
