@@ -146,6 +146,8 @@ const wslMirrored: NetworkInterfaceMap = {
   eth0: [en0],
 };
 const wslEnv = { WSL_DISTRO_NAME: "Ubuntu" };
+const wsl1Release = () => "4.4.0-19041-Microsoft";
+const wsl2Release = () => "5.15.167.4-microsoft-standard-WSL2";
 
 describe("detectWslNetworking", () => {
   it("reads a NAT distro from its 172.16.0.0/12 address", () => {
@@ -167,6 +169,33 @@ describe("detectWslNetworking", () => {
   it("reports unknown for a distro whose addresses match neither shape", () => {
     expect(detectWslNetworking(interfaces, wslEnv)).toBe("unknown");
     expect(detectWslNetworking({ lo: [lo] }, wslEnv)).toBe("unknown");
+  });
+
+  it("reads WSL1 from the capitalized kernel suffix, whatever the interfaces show", () => {
+    // WSL1 sees Windows' own adapters, so the interface map is a normal LAN one
+    // and would otherwise read as unknown.
+    expect(detectWslNetworking(interfaces, wslEnv, wsl1Release)).toBe("wsl1");
+    expect(detectWslNetworking({ lo: [lo], eth0: [en0] }, wslEnv, wsl1Release)).toBe("wsl1");
+  });
+
+  it("reads WSL1 from /proc/version when osrelease is unreadable", () => {
+    const onlyVersion = (path: string) =>
+      path === "/proc/version"
+        ? "Linux version 4.4.0-18985-Microsoft (Microsoft@Microsoft.com)"
+        : undefined;
+    expect(detectWslNetworking(interfaces, wslEnv, onlyVersion)).toBe("wsl1");
+  });
+
+  it("does not call a WSL2 kernel WSL1, including the 4.19 builds with no WSL2 marker", () => {
+    // Matching "no WSL2 in the string" instead of the capital M would misread
+    // this one, which is why the check is a positive match on WSL1.
+    expect(detectWslNetworking(wslNat, wslEnv, () => "4.19.67-microsoft-standard")).toBe("nat");
+    expect(detectWslNetworking(wslMirrored, wslEnv, wsl2Release)).toBe("mirrored");
+    expect(detectWslNetworking(wslNat, wslEnv, wsl2Release)).toBe("nat");
+  });
+
+  it("stays not-wsl for a kernel with no WSL signal at all", () => {
+    expect(detectWslNetworking(interfaces, {}, () => "6.8.0-45-generic")).toBe("not-wsl");
   });
 });
 
@@ -193,5 +222,36 @@ describe("resolveListenAddresses under WSL", () => {
   it("points a missing tailnet at the distro rather than the machine", () => {
     const result = resolveListenAddresses(select(["loopback", "tailnet"]), wslNat, "nat");
     expect(result.warnings[0]).toContain("not running inside this WSL distro");
+  });
+
+  it("stays quiet about a lan bind under WSL1, which really does reach the LAN", () => {
+    const result = resolveListenAddresses(select(["loopback", "lan"]), interfaces, "wsl1");
+    expect(result.addresses).toEqual(["127.0.0.1", "192.168.1.20", "10.0.0.7"]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("never offers mirrored networking to WSL1, where .wslconfig does nothing", () => {
+    const warnings = resolveListenAddresses(
+      select(["loopback", "tailnet", "lan"]),
+      { lo: [lo], eth0: [en0] },
+      "wsl1",
+    ).warnings;
+    expect(warnings.join(" ")).not.toContain("networkingMode=mirrored");
+  });
+
+  it("points a missing tailnet at the Windows host under WSL1", () => {
+    const result = resolveListenAddresses(
+      select(["loopback", "tailnet"]),
+      { lo: [lo], eth0: [en0] },
+      "wsl1",
+    );
+    expect(result.warnings[0]).toContain("Windows host");
+    expect(result.warnings[0]).not.toContain("Install and start it in the distro");
+  });
+
+  it("leaves a resolved tailnet address unwarned under WSL1", () => {
+    expect(
+      resolveListenAddresses(select(["loopback", "tailnet"]), interfaces, "wsl1").warnings,
+    ).toEqual([]);
   });
 });
