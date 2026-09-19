@@ -985,6 +985,33 @@ describe("ClaudeSettings pxpipe routing", () => {
   });
 });
 
+describe("ClaudeSettings first-party remote features", () => {
+  it("leaves every existing instance gated", () => {
+    expect(decodeClaudeSettings({}).firstPartyRemoteFeatures).toBe(false);
+    expect(decodeServerSettings({}).providers.claudeAgent.firstPartyRemoteFeatures).toBe(false);
+  });
+
+  it("is opted into per instance", () => {
+    expect(decodeClaudeSettings({ firstPartyRemoteFeatures: true }).firstPartyRemoteFeatures).toBe(
+      true,
+    );
+    expect(
+      decodeServerSettingsPatch({ providers: { claudeAgent: { firstPartyRemoteFeatures: true } } })
+        .providers?.claudeAgent?.firstPartyRemoteFeatures,
+    ).toBe(true);
+  });
+
+  it("stays a Claude-only setting", () => {
+    const providers = decodeServerSettings({}).providers;
+    for (const [driver, settings] of Object.entries(providers)) {
+      expect([driver, "firstPartyRemoteFeatures" in settings]).toEqual([
+        driver,
+        driver === "claudeAgent",
+      ]);
+    }
+  });
+});
+
 describe("ServerSettings environment icon", () => {
   it("defaults to null", () => {
     expect(decodeServerSettings({}).environmentIcon).toBeNull();

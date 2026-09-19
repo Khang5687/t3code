@@ -1549,6 +1549,22 @@ const CLAUDE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+/**
+ * Fork-only. What an instance without `firstPartyRemoteFeatures` sends as the
+ * SDK's policy tier, which outranks the user, project and local settings the
+ * session also loads — so a Claude account shared with other people cannot
+ * reach this machine through claude.ai.
+ *
+ * `managedSettings` is the only lever that closes Remote Control; both keys
+ * survive the SDK's restrictive-only filter. The companion env var set in
+ * `applyClaudeFirstPartyGates` covers connectors on the paths that do not go
+ * through `query()`, including T3 terminals.
+ */
+const CLAUDE_FIRST_PARTY_LOCKDOWN = {
+  disableRemoteControl: true,
+  disableClaudeAiConnectors: true,
+} as const satisfies NonNullable<ClaudeQueryOptions["managedSettings"]>;
+
 function buildPromptText(
   input: ProviderSendTurnInput,
   boundInstanceId: ProviderInstanceId,
@@ -4922,6 +4938,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           append: buildRuntimeInstructions({ harness: "Claude Code" }),
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
+        ...(claudeSettings.firstPartyRemoteFeatures
+          ? {}
+          : { managedSettings: CLAUDE_FIRST_PARTY_LOCKDOWN }),
         // `ultracode` is a Claude Code setting, not an API effort level. It is
         // normalized to `xhigh` above and paired with `settings.ultracode`.
         ...(effectiveEffort
@@ -4986,6 +5005,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.include_partial_messages": true,
         "claude.query.additional_directories": additionalDirectories,
         "claude.query.setting_sources": [...CLAUDE_SETTING_SOURCES],
+        "claude.query.first_party_remote_features": claudeSettings.firstPartyRemoteFeatures,
         "claude.query.settings_json": encodeJsonStringForDiagnostics(settings) ?? "",
         "claude.query.extra_args_json": encodeJsonStringForDiagnostics(extraArgs) ?? "",
         "claude.query.path_to_executable": claudeBinaryPath,

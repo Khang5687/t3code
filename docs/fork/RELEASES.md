@@ -1,5 +1,23 @@
 # Fork releases
 
+## Unreleased
+
+### Features
+
+**Claude's first-party remote features are off by default.** Claude Code
+registers sessions with claude.ai for Remote Control and auto-loads that
+account's connectors, which hands everyone who shares the account a way into
+this machine. A new per-instance switch, **Allow Claude's first-party remote
+features**, is off on every instance including existing ones. While it is off,
+threads, text generation and the provider probes run under a policy that refuses
+Remote Control and claude.ai connectors, and terminals on that instance refuse
+connectors. A `claude` started by hand in a terminal still offers Remote
+Control — Claude Code has no environment variable for it — so the instance card
+and [Providers > Claude](../user/providers-claude.md#keep-claudeai-out-of-this-machine)
+say so and name the fallback. Routing through pxpipe already closed both gates;
+the card says that too. Mobile shows each Claude instance's gate read-only under
+**Settings > pxpipe**.
+
 ## v0.0.42-fork.1
 
 Built on upstream `v0.0.42`.

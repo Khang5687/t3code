@@ -43,6 +43,25 @@ describe("pxpipeRoutableInstances", () => {
     expect(rows.map((row) => row.instanceId)).toEqual([defaultClaude]);
   });
 
+  it("reports each instance's first-party gates read-only, since a phone cannot flip them", () => {
+    const rows = pxpipeRoutableInstances(
+      [
+        { instanceId: defaultClaude, driver: claudeDriver },
+        { instanceId: workClaude, driver: claudeDriver },
+      ],
+      settings({
+        providerInstances: instances({
+          [workClaude]: { driver: claudeDriver, config: { firstPartyRemoteFeatures: true } },
+        }),
+      }),
+    );
+
+    expect(rows.map((row) => row.remoteFeaturesStatus)).toEqual([
+      "Remote Control and claude.ai connectors: off",
+      "Remote Control and claude.ai connectors: allowed",
+    ]);
+  });
+
   it("reads the legacy mirror for a default slot that has no instance entry", () => {
     const rows = pxpipeRoutableInstances(
       [{ instanceId: defaultClaude, driver: claudeDriver }],

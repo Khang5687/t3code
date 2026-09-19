@@ -69,11 +69,18 @@ describe("ProviderSettingsForm helpers", () => {
       "autoCompactWindow",
       "launchArgs",
       "routeThroughPxpipe",
+      "firstPartyRemoteFeatures",
     ]);
     // Annotation-driven: routing needs no bespoke form code.
     expect(fields.find((field) => field.key === "routeThroughPxpipe")).toMatchObject({
       control: "switch",
       defaultBooleanValue: false,
+    });
+    // Off by default: a shared Claude account must not reach this machine.
+    expect(fields.find((field) => field.key === "firstPartyRemoteFeatures")).toMatchObject({
+      control: "switch",
+      defaultBooleanValue: false,
+      label: "Allow Claude's first-party remote features",
     });
   });
 

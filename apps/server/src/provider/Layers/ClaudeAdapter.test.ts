@@ -436,6 +436,36 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  // Fork-only. `managedSettings` is the policy tier, so it outranks the user,
+  // project and local settings the same session loads — the only lever that
+  // keeps a shared Claude account from reaching this machine.
+  it.effect.each([
+    { name: "locks Remote Control and connectors by default", claudeConfig: {}, expected: true },
+    {
+      name: "leaves both open when the instance opts in",
+      claudeConfig: { firstPartyRemoteFeatures: true },
+      expected: false,
+    },
+  ])("$name", ({ claudeConfig, expected }) => {
+    const harness = makeHarness({ claudeConfig });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(
+        harness.getLastCreateQueryInput()?.options.managedSettings,
+        expected ? { disableRemoteControl: true, disableClaudeAiConnectors: true } : undefined,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("derives bypass permission mode from full-access runtime policy", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

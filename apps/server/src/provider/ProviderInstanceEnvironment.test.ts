@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 
 import {
+  applyClaudeFirstPartyGates,
   applyPxpipeRouting,
   mergeProviderInstanceEnvironment,
 } from "./ProviderInstanceEnvironment.ts";
@@ -102,5 +103,47 @@ describe("applyPxpipeRouting", () => {
     const env = { ANTHROPIC_BASE_URL: "" };
 
     expect(applyPxpipeRouting(env, 47821)).toBe(env);
+  });
+});
+
+describe("applyClaudeFirstPartyGates", () => {
+  it("closes the connectors gate on an instance that has not opted in", () => {
+    expect(applyClaudeFirstPartyGates({ PATH: "/bin" }, false)).toEqual({
+      PATH: "/bin",
+      ENABLE_CLAUDEAI_MCP_SERVERS: "0",
+    });
+  });
+
+  it("leaves an opted-in instance untouched", () => {
+    const env = { PATH: "/bin" };
+
+    expect(applyClaudeFirstPartyGates(env, true)).toBe(env);
+  });
+
+  it("keeps a value the instance sets by hand", () => {
+    const env = { ENABLE_CLAUDEAI_MCP_SERVERS: "1" };
+
+    expect(applyClaudeFirstPartyGates(env, false)).toBe(env);
+  });
+
+  it("keeps a value the child inherits from the server process", () => {
+    const env = { PATH: "/bin" };
+
+    expect(applyClaudeFirstPartyGates(env, false, { ENABLE_CLAUDEAI_MCP_SERVERS: "1" })).toBe(env);
+  });
+
+  it("gates a routed instance too, so the two rules compose", () => {
+    expect(applyClaudeFirstPartyGates(applyPxpipeRouting({ PATH: "/bin" }, 47821), false)).toEqual({
+      PATH: "/bin",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:47821",
+      ENABLE_CLAUDEAI_MCP_SERVERS: "0",
+    });
+  });
+
+  it("leaves an opted-in routed instance to pxpipe, which closes both gates anyway", () => {
+    expect(applyClaudeFirstPartyGates(applyPxpipeRouting({ PATH: "/bin" }, 47821), true)).toEqual({
+      PATH: "/bin",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:47821",
+    });
   });
 });

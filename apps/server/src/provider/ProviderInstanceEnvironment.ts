@@ -63,3 +63,45 @@ export function applyPxpipeRouting(
   // the provider process it serves.
   return { ...env, [ANTHROPIC_BASE_URL]: `http://127.0.0.1:${port}` };
 }
+
+/**
+ * The one env var Claude Code reads to switch off auto-fetching claude.ai
+ * connectors. It is named for enabling, and `"0"` is how you say no: the CLI
+ * treats `0|false|no|off` as "disabled via env var".
+ */
+export const ENABLE_CLAUDEAI_MCP_SERVERS = "ENABLE_CLAUDEAI_MCP_SERVERS";
+
+/**
+ * Close Claude Code's first-party client gates for an instance that has not
+ * opted into them, or hand the environment back untouched when it has.
+ *
+ * Fork-only, and deliberately the neighbour of `applyPxpipeRouting`: both
+ * describe what a Claude instance's child processes are allowed to talk to,
+ * and both have to reach every path an instance owns — SDK sessions, text
+ * generation, the status and capabilities probes, and T3 terminals — or one
+ * of them keeps the feature alive.
+ *
+ * Only connectors are reachable from here. Remote Control has no env switch;
+ * the SDK sessions close it with the `managedSettings` policy tier in
+ * `ClaudeAdapter`, and a `claude` the user starts by hand in a T3 terminal
+ * still offers it unless the instance routes through pxpipe (ADR 0004) or the
+ * user sets `disableRemoteControl` in their own Claude settings.
+ *
+ * An explicit value wins, from the instance's own environment list (already
+ * merged into `env`) or inherited by the child (`inheritedEnv`), for the same
+ * reason routing yields to a hand-set `ANTHROPIC_BASE_URL`.
+ */
+export function applyClaudeFirstPartyGates(
+  env: NodeJS.ProcessEnv,
+  allowed: boolean,
+  inheritedEnv: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  if (allowed) return env;
+  if (
+    env[ENABLE_CLAUDEAI_MCP_SERVERS] !== undefined ||
+    inheritedEnv[ENABLE_CLAUDEAI_MCP_SERVERS] !== undefined
+  ) {
+    return env;
+  }
+  return { ...env, [ENABLE_CLAUDEAI_MCP_SERVERS]: "0" };
+}

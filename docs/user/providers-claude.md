@@ -112,3 +112,25 @@ for its installation and routing configuration.
 An instance can send its Anthropic traffic through a local pxpipe proxy, which
 compresses each request. See [pxpipe sidecar](./pxpipe-sidecar.md) for what to
 turn on and what a routed instance gives up.
+
+## Keep claude.ai out of this machine
+
+Claude Code can register a session with claude.ai so it can be driven from the
+web, and it auto-loads the connectors your Claude account has. Anyone who shares
+that account gets both. T3 Code turns them off for the instances it launches.
+
+**Allow Claude's first-party remote features** on a Claude instance is off by
+default and covers, when off:
+
+- Threads, text generation and the provider probes refuse Remote Control and
+  claude.ai connectors.
+- Terminals opened on that instance refuse claude.ai connectors.
+
+A `claude` you start by hand in a terminal still offers Remote Control, because
+Claude Code has no environment variable for it. Set `"disableRemoteControl":
+true` in your own Claude settings to close that too, or route the instance
+through pxpipe, which stops Claude Code treating the session as first-party at
+all.
+
+Turn the switch on if you want `/remote-control` and claude.ai connectors back.
+It has no effect while the instance routes through pxpipe.

@@ -240,6 +240,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         launchArgs: "",
         autoCompactWindow: "",
         routeThroughPxpipe: false,
+        firstPartyRemoteFeatures: false,
       });
       assert.deepEqual(
         next.textGenerationModelSelection,
@@ -950,6 +951,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         launchArgs: "",
         autoCompactWindow: "",
         routeThroughPxpipe: false,
+        firstPartyRemoteFeatures: false,
       });
       assert.deepEqual(next.providers.opencode, {
         // OpenCode is disabled by default; this update only touches paths.

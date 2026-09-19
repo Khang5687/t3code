@@ -16,6 +16,10 @@ import {
   type SidecarEnvironmentVariable,
 } from "@t3tools/contracts";
 import {
+  claudeFirstPartyFeaturesStatus,
+  readFirstPartyRemoteFeatures,
+} from "@t3tools/client-runtime/state/claude-first-party";
+import {
   pxpipeRoutingOverride,
   readRouteThroughPxpipe,
 } from "@t3tools/client-runtime/state/pxpipe";
@@ -28,6 +32,13 @@ export interface PxpipeRoutableInstance {
   readonly routed: boolean;
   /** Set when the switch is on but a hand-set base URL wins; null otherwise. */
   readonly inactiveReason: string | null;
+  /**
+   * Read-only echo of the instance's first-party gates. Mobile has no provider
+   * settings screen to flip them from, and this is the only place it lists
+   * Claude instances — so it reports what routing already implies rather than
+   * leaving the phone unable to see it at all.
+   */
+  readonly remoteFeaturesStatus: string;
 }
 
 /**
@@ -81,6 +92,13 @@ export function pxpipeRoutableInstances(
           String(provider.instanceId),
         routed,
         inactiveReason: pxpipeRoutingOverride(routed, environment),
+        remoteFeaturesStatus: claudeFirstPartyFeaturesStatus({
+          allowed: readFirstPartyRemoteFeatures(
+            settings.providerInstances[provider.instanceId]?.config ??
+              settings.providers.claudeAgent,
+          ),
+          routedThroughPxpipe: routed,
+        }),
       };
     });
 }

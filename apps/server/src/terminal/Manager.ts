@@ -60,6 +60,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ServerConfig from "../config.ts";
 import {
+  applyClaudeFirstPartyGates,
   applyPxpipeRouting,
   mergeProviderInstanceEnvironment,
 } from "../provider/ProviderInstanceEnvironment.ts";
@@ -1393,6 +1394,14 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
       resolved = applyPxpipeRouting(
         resolved,
         config.value.routeThroughPxpipe ? settings.sidecars.pxpipe.port : null,
+        input.baseEnv ?? process.env,
+      );
+      // Fork-only. Same reason as routing: a `claude` the user starts in a
+      // terminal on this instance gets the instance's gates, not the account's
+      // defaults.
+      resolved = applyClaudeFirstPartyGates(
+        resolved,
+        config.value.firstPartyRemoteFeatures,
         input.baseEnv ?? process.env,
       );
     }

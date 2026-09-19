@@ -116,6 +116,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   launchArgs: "",
   autoCompactWindow: "",
   routeThroughPxpipe: false,
+  firstPartyRemoteFeatures: false,
   ...overrides,
 });
 

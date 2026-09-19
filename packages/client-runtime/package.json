@@ -135,6 +135,10 @@
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
     },
+    "./state/claude-first-party": {
+      "types": "./src/state/claudeFirstParty.ts",
+      "default": "./src/state/claudeFirstParty.ts"
+    },
     "./state/pxpipe": {
       "types": "./src/state/pxpipe.ts",
       "default": "./src/state/pxpipe.ts"

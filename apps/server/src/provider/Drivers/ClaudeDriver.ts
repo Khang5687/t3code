@@ -51,6 +51,7 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import {
+  applyClaudeFirstPartyGates,
   applyPxpipeRouting,
   mergeProviderInstanceEnvironment,
 } from "../ProviderInstanceEnvironment.ts";
@@ -136,9 +137,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
             Effect.catchCause(() => Effect.succeed(DEFAULT_PXPIPE_SIDECAR_PORT)),
           )
         : null;
-      const processEnv = applyPxpipeRouting(
-        mergeProviderInstanceEnvironment(environment),
-        pxpipePort,
+      const processEnv = applyClaudeFirstPartyGates(
+        applyPxpipeRouting(mergeProviderInstanceEnvironment(environment), pxpipePort),
+        config.firstPartyRemoteFeatures,
       );
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,

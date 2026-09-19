@@ -682,9 +682,28 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         providerSettingsForm: { control: "switch" },
       }),
     ),
+    // Fork-only. Default off: a shared Claude account means everyone on it can
+    // drive a Remote Control session, and T3 Code is single-user. Opt back in
+    // per instance.
+    firstPartyRemoteFeatures: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Allow Claude's first-party remote features",
+        description:
+          "Remote Control and claude.ai connectors. Off by default so other people on this Claude account cannot drive this machine from claude.ai.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs", "routeThroughPxpipe"],
+    order: [
+      "binaryPath",
+      "homePath",
+      "autoCompactWindow",
+      "launchArgs",
+      "routeThroughPxpipe",
+      "firstPartyRemoteFeatures",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1396,6 +1415,7 @@ const ClaudeSettingsPatch = Schema.Struct({
     TrimmedString.check(Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN)),
   ),
   routeThroughPxpipe: Schema.optionalKey(Schema.Boolean),
+  firstPartyRemoteFeatures: Schema.optionalKey(Schema.Boolean),
 });
 
 const CursorSettingsPatch = Schema.Struct({

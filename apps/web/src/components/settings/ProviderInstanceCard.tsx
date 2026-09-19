@@ -32,6 +32,10 @@ import {
   toCustomModelSetting,
 } from "@t3tools/shared/model";
 import {
+  claudeFirstPartyFeaturesNote,
+  readFirstPartyRemoteFeatures,
+} from "@t3tools/client-runtime/state/claude-first-party";
+import {
   pxpipeRoutingOverride,
   readRouteThroughPxpipe,
 } from "@t3tools/client-runtime/state/pxpipe";
@@ -440,10 +444,14 @@ export function ProviderInstanceCard({
   // Fork-only (ADR 0004). A property of the routing mechanism rather than of
   // the sidecar's state, so it is read from this instance's own config and
   // environment instead of arriving as a prop.
-  const pxpipeRoutingNote = pxpipeRoutingOverride(
-    readRouteThroughPxpipe(instance.config),
-    instance.environment,
-  );
+  const routedThroughPxpipe = readRouteThroughPxpipe(instance.config);
+  const pxpipeRoutingNote = pxpipeRoutingOverride(routedThroughPxpipe, instance.environment);
+  // Fork-only. The switch is honest about the paths T3 Code spawns; this says
+  // what routing already covers and what a hand-started `claude` still has.
+  const firstPartyNote = claudeFirstPartyFeaturesNote({
+    allowed: readFirstPartyRemoteFeatures(instance.config),
+    routedThroughPxpipe,
+  });
   // A locally disabled provider reads "Disabled" with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.
   const statusKey: ProviderStatusKey = enabled
@@ -905,6 +913,9 @@ export function ProviderInstanceCard({
             />
             {pxpipeRoutingNote ? (
               <SettingsRow title="Routing inactive" description={pxpipeRoutingNote} />
+            ) : null}
+            {firstPartyNote ? (
+              <SettingsRow title="Remote features" description={firstPartyNote} />
             ) : null}
           </>
         ) : (

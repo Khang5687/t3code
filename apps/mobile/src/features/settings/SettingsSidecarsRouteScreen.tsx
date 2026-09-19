@@ -154,7 +154,7 @@ function EnvironmentPxpipeSection(props: {
           <SettingsSwitchRow
             icon="arrow.triangle.swap"
             label={instance.label}
-            subtitle={instance.inactiveReason ?? undefined}
+            subtitle={instance.inactiveReason ?? instance.remoteFeaturesStatus}
             value={instance.routed}
             onValueChange={(routed) => setRouted(instance.instanceId, routed)}
           />

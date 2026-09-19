@@ -2234,6 +2234,40 @@ it.layer(
     ),
   );
 
+  // Fork-only. A terminal on a gated instance closes the same first-party
+  // gates its threads do, so `claude` started by hand cannot reach claude.ai
+  // connectors either.
+  it.effect.each([
+    { name: "gates an instance that has not opted in", instanceId: "claude_direct", expected: "0" },
+    { name: "leaves an opted-in instance alone", instanceId: "claude_open", expected: undefined },
+  ])("$name", ({ instanceId, expected }) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        serverSettings,
+        path,
+        rawProviderInstanceId: instanceId,
+        env: undefined,
+        baseEnv: {},
+      });
+
+      expect(environment.ENABLE_CLAUDEAI_MCP_SERVERS).toBe(expected);
+    }).pipe(
+      Effect.provide(
+        ServerSettings.ServerSettingsService.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("claude_direct")]: { driver: "claudeAgent", config: {} },
+            [ProviderInstanceId.make("claude_open")]: {
+              driver: "claudeAgent",
+              config: { firstPartyRemoteFeatures: true },
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
   it.effect("keeps unknown provider instance ids unavailable after legacy hydration", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
