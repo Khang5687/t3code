@@ -1,25 +1,5 @@
 # Fork releases
 
-## Unreleased
-
-### Features
-
-**Claude's first-party remote features are off by default.** Claude Code
-registers sessions with claude.ai for Remote Control and auto-loads that
-account's connectors, which hands everyone who shares the account a way into
-this machine. A new per-instance switch, **Allow Claude's first-party remote
-features**, is off on every instance including existing ones. While it is off,
-threads, text generation and the provider probes run under a policy that refuses
-Remote Control and claude.ai connectors, and terminals on that instance refuse
-connectors. A `claude` started by hand in a terminal still offers Remote
-Control — Claude Code has no environment variable for it — so the instance card
-and [Providers > Claude](../user/providers-claude.md#keep-claudeai-out-of-this-machine)
-say so and name the fallback. On a machine an IT department manages, Claude Code
-drops T3 Code's policy whole and Remote Control stays available; the card and the
-guide say that too rather than drawing a gate that is not closed. Routing through
-pxpipe already closed both gates. Mobile shows each Claude instance's gate
-read-only under **Settings > pxpipe**.
-
 ## v0.0.42-fork.1
 
 Built on upstream `v0.0.42`.
@@ -49,22 +29,55 @@ loopback and says so. See
 [Remote access](../user/remote-access.md#pair-over-a-lan-or-private-network) and
 [ADR 0003](../adr/0003-exposure-is-a-set-of-listen-interfaces.md).
 
+**Peer allowlist.** Binding an interface used to mean every peer that could
+reach it could reach the server. Now you can name who may connect: `--allow-peer
+10.0.0.0/8` on the CLI, `T3CODE_ALLOWED_PEERS` in the environment, or **Restrict
+who may connect** in the desktop exposure panel. Entries are IPv4 or IPv6
+addresses or CIDRs. The allowlist only narrows: loopback is always allowed, and a
+bind on a wildcard address with no allowlist is called out as such. Rejected
+connections are destroyed before any HTTP byte and logged once per peer per
+minute. Under WSL, `lan` and `tailnet` now warn at startup and in the exposure
+panel when the bind cannot reach what it claims (WSL2 NAT hides the real LAN;
+`tailnet` needs Tailscale in the distro), and WSL1 is no longer told to switch a
+networking mode it does not have.
+
 **pxpipe sidecar.** pxpipe is a local proxy for the Anthropic Messages API that
 compresses requests to cut input tokens. The environment installs a pinned copy
 on first start, supervises it, and reports its health. Turn it on under
 **Settings > Sidecars > pxpipe** on web or desktop, then route individual Claude
 instances through it with **Route through pxpipe** on the instance. Mobile shows
 each environment's sidecar status read-only under **Settings > pxpipe** and can
-flip the per-instance routing switch. Full guide:
+flip the per-instance routing switch. Routing does not cost prompt-cache hits:
+pxpipe's rewrite is deterministic and the cached prefix stays byte-stable, so
+you pay one cache write on the turn after you flip the switch. Full guide:
 [pxpipe sidecar](../user/pxpipe-sidecar.md),
 [ADR 0004](../adr/0004-pxpipe-managed-sidecar.md).
+
+**Claude's first-party remote features are off by default.** Claude Code
+registers sessions with claude.ai for Remote Control and auto-loads that
+account's connectors, which hands everyone who shares the account a way into
+this machine. A per-instance switch, **Allow Claude's first-party remote
+features**, is off on every instance including existing ones. While it is off,
+threads, text generation and the provider probes run under a policy that refuses
+Remote Control and claude.ai connectors, and terminals on that instance refuse
+connectors. A `claude` started by hand in a terminal still offers Remote
+Control, Claude Code has no environment variable for it, so the instance card
+and [Providers > Claude](../user/providers-claude.md#keep-claudeai-out-of-this-machine)
+say so and name the fallback. On a machine an IT department manages, Claude Code
+drops T3 Code's policy whole and Remote Control stays available; the card and the
+guide say that too rather than drawing a gate that is not closed. Routing through
+pxpipe already closed both gates. Mobile shows each Claude instance's gate
+read-only under **Settings > pxpipe**.
 
 **Skills.** Three related additions:
 
 - _Disabled-skill fold._ A new **Skills** section under **Settings > Providers**
   lists every skill your providers report and lets you switch one off. A
   disabled skill disappears from the composer pickers and its `$name` is sent as
-  plain prose instead of dispatching.
+  plain prose instead of dispatching. The switch reads "Show `name` in T3 Code"
+  because that is all it does: T3 Code never writes provider config, so the
+  provider can still auto-invoke a hidden skill, and each row says so. Rows also
+  name the other folders a switch covers when two roots share a skill name.
 - _Provenance in the pickers._ Composer skill rows carry a short source label
   (Project, Personal, System, Other) on both web and mobile, so a Personal
   `review` and a Project `review` are tellable apart.
@@ -118,21 +131,19 @@ same way upstream does.
 
 ### Known gaps
 
-- Exposure has no peer allowlist. Choosing an interface means every peer that
-  can reach it can reach the server.
 - Inside WSL, the interface selection resolves against the distro's interfaces,
-  not Windows'. Under WSL2's default NAT networking `lan` binds an address on
-  the WSL virtual network rather than the real LAN, and `tailnet` resolves to
-  nothing unless Tailscale runs in the distro. The WSL path is untested on a
-  real WSL machine.
-- Disabling a skill changes T3 Code only. T3 Code never writes provider config,
-  so a provider can still auto-invoke a skill you disabled.
+  not Windows'. The server warns when a `lan` or `tailnet` bind cannot reach
+  what it claims, but the whole WSL path is untested on a real WSL machine.
+- Hiding a skill changes T3 Code only. The provider can still auto-invoke it;
+  the only real off switch is the provider's own config.
 - Skill identity is `{source, name}`, so same-named skills in two roots of the
   same kind go off together, and a skill two providers both see goes off for
   both.
-- A routed Claude instance loses Claude Code's first-party client features:
-  `/remote-control` and claude.ai connectors stop working. It can also lose
-  prompt-cache hits, because pxpipe rewrites request bodies.
+- The first-party gate covers what T3 Code spawns. A `claude` you start by hand
+  in a terminal still offers Remote Control, and IT-managed Claude settings
+  override the gate entirely; the instance card says which case applies.
+- A routed Claude instance loses Claude Code's first-party client features
+  (Remote Control, claude.ai connectors) whatever the gate says.
 - A routed turn never falls back to Anthropic directly. If the sidecar is
   unhealthy the turn fails and the thread records the status and last error.
 - An instance that sets its own `ANTHROPIC_BASE_URL` keeps it and is never
