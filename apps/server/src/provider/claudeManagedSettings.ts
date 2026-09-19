@@ -24,10 +24,7 @@ import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hos
  * per-platform resolution. `CLAUDE_CODE_MANAGED_SETTINGS_PATH` overrides it
  * there, so it overrides it here.
  */
-export function claudeManagedSettingsDirectory(
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): string {
+function claudeManagedSettingsDirectory(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
   const override = env.CLAUDE_CODE_MANAGED_SETTINGS_PATH?.trim();
   if (override) return override;
   if (platform === "darwin") return "/Library/Application Support/ClaudeCode";

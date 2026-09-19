@@ -98,7 +98,7 @@ export const isLoopbackHost = (host: string | undefined): boolean => {
   );
 };
 
-export const isWildcardHost = (host: string | undefined): boolean =>
+const isWildcardHost = (host: string | undefined): boolean =>
   host === "0.0.0.0" || host === "::" || host === "[::]";
 
 /**

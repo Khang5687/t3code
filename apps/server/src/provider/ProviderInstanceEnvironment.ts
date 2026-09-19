@@ -69,7 +69,7 @@ export function applyPxpipeRouting(
  * connectors. It is named for enabling, and `"0"` is how you say no: the CLI
  * treats `0|false|no|off` as "disabled via env var".
  */
-export const ENABLE_CLAUDEAI_MCP_SERVERS = "ENABLE_CLAUDEAI_MCP_SERVERS";
+const ENABLE_CLAUDEAI_MCP_SERVERS = "ENABLE_CLAUDEAI_MCP_SERVERS";
 
 /**
  * Close Claude Code's first-party client gates for an instance that has not
