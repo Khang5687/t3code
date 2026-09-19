@@ -8,7 +8,6 @@ import {
   isIpv4Address,
   listenInterfacesEqual,
   listenInterfacesForPreset,
-  normalizeListenInterfaces,
 } from "@t3tools/contracts";
 import { type ReactNode, useCallback, useId, useState } from "react";
 
@@ -27,7 +26,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { SettingsRow } from "./settingsLayout";
-import { EXPOSURE_PRESET_OPTIONS, widensExposure } from "./ExposureSettings.logic";
+import { EXPOSURE_PRESET_OPTIONS, rebindSelection, widensExposure } from "./ExposureSettings.logic";
 
 const LISTEN_INTERFACE_LABELS: Record<ListenInterfaceKind, string> = {
   loopback: "Loopback",
@@ -121,16 +120,17 @@ export function ExposureSettingsRow({
         return;
       }
       setIsCustomRevealed(false);
-      request(listenInterfacesForPreset(value));
+      if (!selection) return;
+      request(rebindSelection(selection, listenInterfacesForPreset(value)));
     },
-    [request],
+    [request, selection],
   );
 
   const handleKindToggle = useCallback(
     (kind: ListenInterfaceKind, selected: boolean) => {
       if (!selection) return;
       request(
-        normalizeListenInterfaces({
+        rebindSelection(selection, {
           kinds: selected
             ? [...selection.kinds, kind]
             : selection.kinds.filter((current) => current !== kind),
@@ -155,7 +155,7 @@ export function ExposureSettingsRow({
     }
     setAddressError(null);
     request(
-      normalizeListenInterfaces({
+      rebindSelection(selection, {
         kinds: selection.kinds,
         addresses: [...selection.addresses, address],
       }),
@@ -166,7 +166,7 @@ export function ExposureSettingsRow({
     (address: string) => {
       if (!selection) return;
       request(
-        normalizeListenInterfaces({
+        rebindSelection(selection, {
           kinds: selection.kinds,
           addresses: selection.addresses.filter((current) => current !== address),
         }),
@@ -201,6 +201,12 @@ export function ExposureSettingsRow({
                     ? state.resolvedAddresses.join(", ")
                     : "nothing yet"}
                 </span>
+                {/* Read-only: the allowlist is set with --allow-peer, not here. */}
+                {selection?.allowedPeers?.length ? (
+                  <span className="block">
+                    Peer allowlist: {selection.allowedPeers.join(", ")} (set with --allow-peer)
+                  </span>
+                ) : null}
                 {state.warnings.map((warning) => (
                   <span className="block text-warning" key={warning}>
                     {warning}

@@ -241,7 +241,8 @@ const PRESET_KINDS: Record<NamedExposurePreset, ReadonlyArray<ListenInterfaceKin
 export const listenInterfacesForPreset = (preset: NamedExposurePreset): ListenInterfaces =>
   normalizeListenInterfaces({ kinds: PRESET_KINDS[preset] });
 
-export const exposurePresetOf = (selection: ListenInterfaces): ExposurePreset => {
+/** The preset a selection's binds alone name, ignoring any peer allowlist. */
+const bindPresetOf = (selection: ListenInterfaces): ExposurePreset => {
   if (selection.addresses.length > 0) {
     return "custom";
   }
@@ -254,11 +255,22 @@ export const exposurePresetOf = (selection: ListenInterfaces): ExposurePreset =>
   return "custom";
 };
 
+/**
+ * A peer allowlist is part of the selection but has no preset, so an
+ * allowlisted selection reads as custom rather than as the preset its binds
+ * would name. Presenting it as a plain preset would invite a client to round-trip
+ * it through `listenInterfacesForPreset` and drop the allowlist.
+ */
+export const exposurePresetOf = (selection: ListenInterfaces): ExposurePreset =>
+  (selection.allowedPeers?.length ?? 0) > 0 ? "custom" : bindPresetOf(selection);
+
 /** Upstream's two-valued exposure mode, kept as a derived view of the selection. */
 export type LegacyExposureMode = "local-only" | "network-accessible";
 
 export const listenInterfacesForLegacyExposureMode = (mode: LegacyExposureMode): ListenInterfaces =>
   listenInterfacesForPreset(mode === "local-only" ? "local-only" : "lan");
 
+// Reads the binds, not `exposurePresetOf`: an allowlist only ever narrows who
+// may connect, so it must not turn a loopback-only bind into "network-accessible".
 export const legacyExposureModeOf = (selection: ListenInterfaces): LegacyExposureMode =>
-  exposurePresetOf(selection) === "local-only" ? "local-only" : "network-accessible";
+  bindPresetOf(selection) === "local-only" ? "local-only" : "network-accessible";

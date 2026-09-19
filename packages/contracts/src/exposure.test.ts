@@ -73,6 +73,17 @@ describe("exposure presets", () => {
       exposurePresetOf(decode({ kinds: ["loopback", "tailnet", "lan"], addresses: ["10.0.0.5"] })),
     ).toBe("custom");
   });
+
+  it("derives custom for a selection carrying a peer allowlist", () => {
+    expect(exposurePresetOf(decode({ kinds: ["loopback"], allowedPeers: ["10.0.0.0/8"] }))).toBe(
+      "custom",
+    );
+    expect(
+      exposurePresetOf(
+        decode({ kinds: ["loopback", "tailnet", "lan"], allowedPeers: ["192.168.1.7"] }),
+      ),
+    ).toBe("custom");
+  });
 });
 
 describe("legacy exposure mode mapping", () => {
@@ -91,6 +102,15 @@ describe("legacy exposure mode mapping", () => {
       "network-accessible",
     );
     expect(legacyExposureModeOf(decode({ kinds: ["tailnet"] }))).toBe("network-accessible");
+  });
+
+  it("ignores a peer allowlist, which only ever narrows who may connect", () => {
+    expect(
+      legacyExposureModeOf(decode({ kinds: ["loopback"], allowedPeers: ["10.0.0.0/8"] })),
+    ).toBe("local-only");
+    expect(legacyExposureModeOf(decode({ kinds: ["lan"], allowedPeers: ["10.0.0.0/8"] }))).toBe(
+      "network-accessible",
+    );
   });
 });
 
