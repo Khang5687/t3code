@@ -191,12 +191,12 @@ describe("resolveListenAddress peer allowlist", () => {
     }
   });
 
-  it("widens the request by the default range of every selected kind", () => {
-    expect(peersOf("lan,allow:203.0.113.7")).toEqual(
-      ["10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.7/32"].sort(),
-    );
+  it("narrows to the request rather than widening it by the selected kinds", () => {
+    // `lan` still binds 192.168.1.42, but naming one peer must not admit all of
+    // 10/8, 172.16/12 and 192.168/16, or the flag would restrict nothing.
+    expect(peersOf("lan,allow:203.0.113.7")).toEqual([LOOPBACK_PEER_CIDR, "203.0.113.7/32"].sort());
     expect(peersOf("tailnet,allow:203.0.113.0/24")).toEqual(
-      ["100.64.0.0/10", "127.0.0.0/8", "203.0.113.0/24"].sort(),
+      [LOOPBACK_PEER_CIDR, "203.0.113.0/24"].sort(),
     );
   });
 
@@ -220,6 +220,30 @@ describe("resolveListenAddress peer allowlist", () => {
     );
     expect(wildcard.warnings.some((warning) => warning.includes("203.0.113.0/24"))).toBe(true);
     expect(wildcard.warnings.some((warning) => /every interface/i.test(warning))).toBe(true);
+  });
+
+  it("warns that an IPv6 bind refuses every IPv6 client", () => {
+    const ipv6Message = /peer allowlist is IPv4-only/;
+
+    expect(
+      resolveListenAddress("fd7a:115c::1,allow:203.0.113.7", tailnetInterfaces).warnings.some(
+        (warning) => ipv6Message.test(warning) && warning.includes("fd7a:115c::1"),
+      ),
+    ).toBe(true);
+    // The v6 wildcard listens on v6 too, so it earns the warning as well.
+    expect(
+      resolveListenAddress("::,allow:203.0.113.7", tailnetInterfaces).warnings.some((warning) =>
+        ipv6Message.test(warning),
+      ),
+    ).toBe(true);
+    // `::1` is folded to 127.0.0.1 by the guard, so nobody is locked out.
+    expect(
+      resolveListenAddress("::1,allow:203.0.113.7", tailnetInterfaces).warnings.some((warning) =>
+        ipv6Message.test(warning),
+      ),
+    ).toBe(false);
+    // No allowlist, nothing to refuse anyone.
+    expect(resolveListenAddress("fd7a:115c::1", tailnetInterfaces).warnings).toEqual([]);
   });
 
   it("adds a host route for a verbatim IPv4 bind and stays quiet about it", () => {

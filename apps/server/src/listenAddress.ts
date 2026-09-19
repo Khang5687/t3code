@@ -5,7 +5,6 @@ import * as NodeOS from "node:os";
 import {
   type AllowedPeer,
   isIpv4Address,
-  type ListenInterfaceKind,
   type ListenInterfaces,
   parseListenHostSelection,
 } from "@t3tools/contracts";
@@ -59,37 +58,25 @@ export interface ResolvedListenAddress {
 export const LOOPBACK_PEER_CIDR = "127.0.0.0/8";
 
 /**
- * What each selected kind implies about who may connect. Applied on top of the
- * user's list rather than baked into the preset, so a preset stays a statement
- * about interfaces only.
+ * The list the socket guard enforces: exactly what the user asked for, plus a
+ * host route per explicit bind address, plus loopback so the machine can never
+ * lock itself out of its own server (ADR 0003). Asking for an allowlist only
+ * narrows. A selected kind's default range is never folded back in, or
+ * `--host lan --allow-peer 192.168.1.5` would still admit the whole LAN and the
+ * flag would restrict nothing.
  *
- * WSL needs nothing extra here: under NAT networking the Windows host reaches
- * the distro through the 172.16.0.0/12 gateway on the Hyper-V switch, which
- * `lan` already covers.
- */
-const KIND_PEER_CIDRS: Record<ListenInterfaceKind, ReadonlyArray<string>> = {
-  loopback: [LOOPBACK_PEER_CIDR],
-  tailnet: ["100.64.0.0/10"],
-  lan: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
-};
-
-/**
- * The list the socket guard enforces: what the user asked for, widened by the
- * default range of every selected kind and by a host route for each explicit
- * bind address, with loopback always present so the machine can never lock
- * itself out of its own server (ADR 0003).
+ * The cost is that reachability the bind implies is not implied here. Under WSL
+ * NAT networking the Windows host arrives from the 172.16.0.0/12 gateway on the
+ * Hyper-V switch, so a WSL user who sets an allowlist has to list that gateway
+ * themselves or lock Windows out.
  */
 const effectiveAllowedPeers = (
   requested: ReadonlyArray<AllowedPeer>,
-  kinds: ReadonlyArray<ListenInterfaceKind>,
   addresses: ReadonlyArray<string>,
 ): ReadonlyArray<string> => {
   const cidrs = new Set<string>([LOOPBACK_PEER_CIDR]);
   for (const peer of requested) {
     cidrs.add(peer.includes("/") ? peer : `${peer}/32`);
-  }
-  for (const kind of kinds) {
-    for (const cidr of KIND_PEER_CIDRS[kind]) cidrs.add(cidr);
   }
   for (const address of addresses) {
     cidrs.add(`${address}/32`);
@@ -113,6 +100,14 @@ export const isLoopbackHost = (host: string | undefined): boolean => {
 
 export const isWildcardHost = (host: string | undefined): boolean =>
   host === "0.0.0.0" || host === "::" || host === "[::]";
+
+/**
+ * A bind address the IPv4-only peer guard cannot speak for. The guard folds
+ * `::1` to 127.0.0.1, so only the other IPv6 binds refuse everyone who arrives
+ * on them.
+ */
+const isIpv6BindAddress = (address: string): boolean =>
+  address.includes(":") && !isLoopbackHost(address);
 
 export const formatHostForUrl = (host: string): string =>
   host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
@@ -178,7 +173,7 @@ const resolveFromInterfaces = (
     allowedPeers:
       selection.allowedPeers === undefined
         ? undefined
-        : effectiveAllowedPeers(selection.allowedPeers, selection.kinds, selection.addresses),
+        : effectiveAllowedPeers(selection.allowedPeers, selection.addresses),
   };
 };
 
@@ -224,9 +219,24 @@ export const resolveListenAddress = (
     verbatimHost !== undefined && !isWildcardHost(verbatimHost) && isIpv4Address(verbatimHost)
       ? [verbatimHost]
       : [];
+  const bindHosts = [verbatimHost ?? LOOPBACK_LISTEN_ADDRESS];
+  // Only the verbatim path can bind IPv6 at all; an interface selection resolves
+  // to IPv4 addresses by construction, so the guard always has something to
+  // match there.
+  const warnings: Array<string> = [];
+  if (requestedPeers.length > 0) {
+    if (kind === "wildcard") {
+      warnings.push(
+        `host ${verbatimHost} listens on every interface; only the peer allowlist (${requestedPeers.join(", ")}) keeps other machines out`,
+      );
+    }
+    for (const address of bindHosts.filter(isIpv6BindAddress)) {
+      warnings.push(`the peer allowlist is IPv4-only; IPv6 clients on ${address} will be refused`);
+    }
+  }
   return {
     kind,
-    bindHosts: [verbatimHost ?? LOOPBACK_LISTEN_ADDRESS],
+    bindHosts,
     remoteReachable: kind !== "loopback",
     configuredHost: host,
     urlHost:
@@ -234,16 +244,9 @@ export const resolveListenAddress = (
         ? formatHostForUrl(verbatimHost)
         : undefined,
     connectionHost: resolveConnectionHost(verbatimHost, interfaces),
-    warnings:
-      requestedPeers.length > 0 && kind === "wildcard"
-        ? [
-            `host ${verbatimHost} listens on every interface; only the peer allowlist (${requestedPeers.join(", ")}) keeps other machines out`,
-          ]
-        : [],
+    warnings,
     allowedPeers:
-      requestedPeers.length > 0
-        ? effectiveAllowedPeers(requestedPeers, [], boundAddress)
-        : undefined,
+      requestedPeers.length > 0 ? effectiveAllowedPeers(requestedPeers, boundAddress) : undefined,
   };
 };
 

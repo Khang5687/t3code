@@ -66,7 +66,7 @@ const hostFlag = Flag.string("host").pipe(
 // one channel that already exists instead of growing a parallel one.
 const allowPeerFlag = Flag.string("allow-peer").pipe(
   Flag.withDescription(
-    "Restrict who may connect to the bound interfaces: an IPv4 address or CIDR (for example 10.0.0.0/8). Repeatable. Loopback is always allowed.",
+    "Restrict who may connect to the bound interfaces: an IPv4 address or CIDR (for example 10.0.0.0/8). Repeatable. Only the entries given are allowed, so list every peer that needs in; loopback is always allowed.",
   ),
   Flag.atLeast(0),
 );

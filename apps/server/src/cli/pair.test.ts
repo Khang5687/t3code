@@ -90,6 +90,18 @@ describe("pair tailscale local target", () => {
       localHost: "192.168.1.42",
     });
   });
+
+  it("proxies the bound address, not the whole listen selection", () => {
+    // `host` carries the selection verbatim, so the `allow:` entries used to
+    // ride along into the serve target.
+    expect(
+      resolveTailscaleLocalTarget({ ...baseState, host: "192.168.1.42,allow:203.0.113.7" }),
+    ).toEqual({ localPort: 3_773, localHost: "192.168.1.42" });
+    // A kind-only selection binds loopback as well, so serve's default reaches it.
+    expect(
+      resolveTailscaleLocalTarget({ ...baseState, host: "loopback,allow:203.0.113.7" }),
+    ).toEqual({ localPort: 3_773 });
+  });
 });
 
 const runCli = (args: ReadonlyArray<string>) => Command.runWith(cli, { version: "0.0.0" })(args);

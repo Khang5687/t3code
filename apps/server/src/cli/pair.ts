@@ -40,12 +40,7 @@ import {
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import {
-  formatHostForUrl,
-  isLoopbackHost,
-  isWildcardHost,
-  resolveListenAddress,
-} from "../listenAddress.ts";
+import { formatHostForUrl, isLoopbackHost, resolveListenAddress } from "../listenAddress.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import {
   type PersistedServerRuntimeState,
@@ -168,12 +163,16 @@ export const resolveTailscaleLocalTarget = (
       ? { localPort }
       : { localPort, localHost: devUrl.hostname };
   }
-  // A server bound to one specific interface does not answer on loopback, so
-  // the proxy has to target that interface directly.
-  if (state.host !== undefined && !isWildcardHost(state.host) && !isLoopbackHost(state.host)) {
-    return { localPort: state.port, localHost: formatHostForUrl(state.host) };
-  }
-  return { localPort: state.port };
+  // `state.host` is the whole listen selection (kinds, addresses, `allow:`
+  // peers), so it is resolved rather than read as a hostname -- passing it
+  // through verbatim made "192.168.1.42,allow:203.0.113.7" the serve target.
+  // A concrete bind is proxied at the address remote clients dial, since a
+  // verbatim one does not answer on loopback; a loopback-only or wildcard bind
+  // answers at serve's own 127.0.0.1 default.
+  const listen = resolveListenAddress(state.host);
+  return listen.kind === "explicit"
+    ? { localPort: state.port, localHost: formatHostForUrl(listen.connectionHost) }
+    : { localPort: state.port };
 };
 
 const formatPairOutput = (input: {
