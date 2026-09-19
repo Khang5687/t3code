@@ -1,8 +1,9 @@
 # Fork releases
 
-## v0.0.42-fork.1
+## v0.0.42-fork.2
 
-Built on upstream `v0.0.42`.
+Built on upstream `v0.0.42`. Supersedes the `v0.0.42-fork.1` draft, which was
+never published.
 
 ### What this fork is
 
@@ -108,14 +109,11 @@ closed, so that work ships here only.
 
 ### Platforms
 
-No CI built this tag. Both artifacts were built by hand on the maintainer's
-machine from commit `2cbac8513d`, so verify them before you install:
-
-```
-81b991de110e5fd047cfff1ab618693869a47d9543bd8c7707def38ef41affd7  T3-Code-0.0.42-fork.1-2cbac8513d-arm64.dmg
-ec65cf2c46834e45e6696f77446658d82b21c0c4f02daaac5fe1842353fb0039  T3-Code-0.0.42-fork.1-2cbac8513d-arm64.zip
-0a80560389e7354795bac46549a5241f074ad016e57f185e7da36c53051b0f1b  t3code-mobile-preview-arm64-v8a-2cbac8513d.apk
-```
+No CI builds this tag. The artifacts are built by hand on the maintainer's
+machine and attached to the release with a `SHA256SUMS` file; the commit they
+were built from is in each file name. Verify against `SHA256SUMS` before you
+install. Do not reuse the `fork.1` draft's builds, they are from `2cbac8513d`
+and predate everything in this release.
 
 **macOS arm64 desktop**, ad-hoc signed and not notarized. Gatekeeper quarantines
 it on first open. Right-click the app and pick Open, or run
