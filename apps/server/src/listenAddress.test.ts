@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveListenAddress, type NetworkInterfacesMap } from "./listenAddress.ts";
+import {
+  LOOPBACK_PEER_CIDR,
+  resolveListenAddress,
+  type NetworkInterfacesMap,
+} from "./listenAddress.ts";
 
 const noInterfaces: NetworkInterfacesMap = {};
 
@@ -171,5 +175,60 @@ describe("resolveListenAddress with a listen-interface selection", () => {
     expect(resolveListenAddress("192.168.1.42", tailnetInterfaces).bindHosts).toEqual([
       "192.168.1.42",
     ]);
+  });
+});
+
+// Order is an artifact of how the union is built; membership is the contract.
+const peersOf = (host: string, interfaces: NetworkInterfacesMap = tailnetInterfaces) => {
+  const peers = resolveListenAddress(host, interfaces).allowedPeers;
+  return peers === undefined ? undefined : [...peers].sort();
+};
+
+describe("resolveListenAddress peer allowlist", () => {
+  it("enforces nothing when no allowlist was asked for", () => {
+    for (const host of [undefined, "loopback", "lan", "0.0.0.0", "192.168.1.42"]) {
+      expect(resolveListenAddress(host, tailnetInterfaces).allowedPeers).toBeUndefined();
+    }
+  });
+
+  it("widens the request by the default range of every selected kind", () => {
+    expect(peersOf("lan,allow:203.0.113.7")).toEqual(
+      ["10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "203.0.113.7/32"].sort(),
+    );
+    expect(peersOf("tailnet,allow:203.0.113.0/24")).toEqual(
+      ["100.64.0.0/10", "127.0.0.0/8", "203.0.113.0/24"].sort(),
+    );
+  });
+
+  it("adds a host route for each explicitly bound address", () => {
+    expect(peersOf("loopback,192.168.1.42,allow:203.0.113.7")).toEqual(
+      ["127.0.0.0/8", "192.168.1.42/32", "203.0.113.7/32"].sort(),
+    );
+  });
+
+  it("always includes loopback so the machine cannot lock itself out", () => {
+    expect(peersOf("allow:203.0.113.0/24")).toEqual([LOOPBACK_PEER_CIDR, "203.0.113.0/24"].sort());
+  });
+
+  it("still enforces the allowlist on a verbatim host, and warns on a wildcard", () => {
+    const wildcard = resolveListenAddress("0.0.0.0,allow:203.0.113.0/24", tailnetInterfaces);
+
+    expect(wildcard.kind).toBe("wildcard");
+    expect(wildcard.bindHosts).toEqual(["0.0.0.0"]);
+    expect(peersOf("0.0.0.0,allow:203.0.113.0/24")).toEqual(
+      [LOOPBACK_PEER_CIDR, "203.0.113.0/24"].sort(),
+    );
+    expect(wildcard.warnings.some((warning) => warning.includes("203.0.113.0/24"))).toBe(true);
+    expect(wildcard.warnings.some((warning) => /every interface/i.test(warning))).toBe(true);
+  });
+
+  it("adds a host route for a verbatim IPv4 bind and stays quiet about it", () => {
+    const listen = resolveListenAddress("192.168.1.42,allow:203.0.113.7", tailnetInterfaces);
+
+    expect(listen.bindHosts).toEqual(["192.168.1.42"]);
+    expect(listen.warnings).toEqual([]);
+    expect(peersOf("192.168.1.42,allow:203.0.113.7")).toEqual(
+      [LOOPBACK_PEER_CIDR, "192.168.1.42/32", "203.0.113.7/32"].sort(),
+    );
   });
 });

@@ -42,6 +42,12 @@ export interface ListenHarnessOptions {
   /** Injected interface table; `{}` means "no NICs" and is the deterministic default. */
   readonly interfaces?: ListenAddress.NetworkInterfacesMap;
   readonly config?: Partial<ServerConfig.ServerConfig["Service"]>;
+  /**
+   * Replaces the resolved allowlist after `--host` has been read. Tests run over
+   * loopback, which the resolver always allows, so proving the rejection path
+   * needs a list that loopback is not on -- which no real selection produces.
+   */
+  readonly allowedPeersOverride?: ReadonlyArray<string>;
 }
 
 export type TcpProbeOutcome =
@@ -86,6 +92,19 @@ const harnessAuthLayer = EnvironmentAuth.layer.pipe(
     }),
   ),
 );
+
+const listenAddressLayer = (options: ListenHarnessOptions) => {
+  const base = ListenAddress.layer({ interfaces: options.interfaces ?? {} });
+  return options.allowedPeersOverride === undefined
+    ? base
+    : Layer.effect(
+        ListenAddress.ListenAddress,
+        Effect.gen(function* () {
+          const listen = yield* ListenAddress.ListenAddress;
+          return { ...listen, allowedPeers: options.allowedPeersOverride };
+        }),
+      ).pipe(Layer.provide(base));
+};
 
 const harnessConfigLayer = (options: ListenHarnessOptions) =>
   Layer.effect(
@@ -157,7 +176,12 @@ export const startListenHarness = (
     const layer = HttpRouter.serve(harnessRoutes, { disableLogger: true }).pipe(
       Layer.provideMerge(HttpServerLive),
       Layer.provide(harnessAuthLayer),
-      Layer.provideMerge(ListenAddress.layer({ interfaces: options.interfaces ?? {} })),
+      Layer.provideMerge(
+        listenAddressLayer(options).pipe(
+          Layer.provide(harnessConfigLayer(options)),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
       Layer.provideMerge(harnessConfigLayer(options)),
       Layer.provideMerge(NodeServices.layer),
     );

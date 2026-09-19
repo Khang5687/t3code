@@ -6,6 +6,7 @@ import {
   exposurePresetOf,
   formatListenInterfaces,
   listenInterfacesEqual,
+  isIpv4Cidr,
   legacyExposureModeOf,
   listenInterfacesForLegacyExposureMode,
   listenInterfacesForPreset,
@@ -234,5 +235,109 @@ describe("parseListenHostSelection", () => {
     for (const host of ["::", "::1", "[::1]", "fd7a:115c::1", "[fd7a:115c::1]", "fe80::1%en0"]) {
       expect(parseListenHostSelection(host)).toEqual({ _tag: "legacy", host });
     }
+  });
+});
+
+describe("peer allowlist entries", () => {
+  it("accepts an IPv4 CIDR and rejects malformed ones", () => {
+    for (const cidr of ["10.0.0.0/8", "0.0.0.0/0", "192.168.1.1/32", "172.16.0.0/12"]) {
+      expect(isIpv4Cidr(cidr)).toBe(true);
+    }
+    for (const cidr of ["10.0.0.0/33", "10.0.0.0", "10.0.0.256/8", "10.0.0.0/", "::1/128"]) {
+      expect(isIpv4Cidr(cidr)).toBe(false);
+    }
+  });
+
+  it("takes both a bare address and a CIDR through the schema", () => {
+    expect(decode({ kinds: ["lan"], allowedPeers: ["10.0.0.0/8", "192.168.1.7"] })).toEqual({
+      kinds: ["loopback", "lan"],
+      addresses: [],
+      allowedPeers: ["10.0.0.0/8", "192.168.1.7"],
+    });
+  });
+
+  it("rejects an entry that is neither an address nor a CIDR", () => {
+    expect(() => decode({ kinds: ["lan"], allowedPeers: ["10.0.0.0/33"] })).toThrow();
+    expect(() => decode({ kinds: ["lan"], allowedPeers: ["example.com"] })).toThrow();
+  });
+
+  it("decodes a selection written before the field existed", () => {
+    const decoded = decode({ kinds: ["lan"], addresses: ["10.0.0.5"] });
+
+    expect(decoded).toEqual({ kinds: ["loopback", "lan"], addresses: ["10.0.0.5"] });
+    expect("allowedPeers" in decoded).toBe(false);
+  });
+
+  it("dedupes peers and drops an empty request back to absent", () => {
+    expect(
+      normalizeListenInterfaces({ kinds: ["lan"], allowedPeers: ["10.0.0.0/8", "10.0.0.0/8"] })
+        .allowedPeers,
+    ).toEqual(["10.0.0.0/8"]);
+    expect("allowedPeers" in normalizeListenInterfaces({ kinds: ["lan"], allowedPeers: [] })).toBe(
+      false,
+    );
+  });
+
+  it("compares peers as part of the selection", () => {
+    const withPeers = normalizeListenInterfaces({ kinds: ["lan"], allowedPeers: ["10.0.0.0/8"] });
+
+    expect(
+      listenInterfacesEqual(
+        withPeers,
+        normalizeListenInterfaces({ kinds: ["lan"], allowedPeers: ["10.0.0.0/8"] }),
+      ),
+    ).toBe(true);
+    // Order is not part of the value, but membership is.
+    expect(
+      listenInterfacesEqual(
+        normalizeListenInterfaces({ kinds: ["lan"], allowedPeers: ["10.0.0.0/8", "10.1.0.0/16"] }),
+        normalizeListenInterfaces({ kinds: ["lan"], allowedPeers: ["10.1.0.0/16", "10.0.0.0/8"] }),
+      ),
+    ).toBe(true);
+    expect(listenInterfacesEqual(withPeers, normalizeListenInterfaces({ kinds: ["lan"] }))).toBe(
+      false,
+    );
+  });
+
+  it("round-trips a selection carrying peers back through the parser", () => {
+    const selection = decode({
+      kinds: ["lan"],
+      addresses: ["10.0.0.5"],
+      allowedPeers: ["10.0.0.0/8", "192.168.1.7"],
+    });
+
+    expect(formatListenInterfaces(selection)).toBe(
+      "loopback,lan,10.0.0.5,allow:10.0.0.0/8,allow:192.168.1.7",
+    );
+    expect(parseListenHostSelection(formatListenInterfaces(selection))).toEqual({
+      _tag: "interfaces",
+      interfaces: selection,
+    });
+  });
+});
+
+describe("parseListenHostSelection with allow: entries", () => {
+  it("keeps peers on a verbatim host instead of reading them as a second bind", () => {
+    expect(parseListenHostSelection("0.0.0.0,allow:10.0.0.0/8")).toEqual({
+      _tag: "legacy",
+      host: "0.0.0.0",
+      allowedPeers: ["10.0.0.0/8"],
+    });
+  });
+
+  it("reads a lone allow: entry as the default loopback selection", () => {
+    expect(parseListenHostSelection("allow:10.0.0.0/8")).toEqual({
+      _tag: "interfaces",
+      interfaces: { kinds: ["loopback"], addresses: [], allowedPeers: ["10.0.0.0/8"] },
+    });
+  });
+
+  it("rejects an allow: entry that is not an address or CIDR", () => {
+    const parsed = parseListenHostSelection("lan,allow:example.com");
+
+    expect(parsed._tag).toBe("invalid");
+    if (parsed._tag !== "invalid") return;
+    expect(parsed.token).toBe("allow:example.com");
+    expect(parsed.message).toContain("allow:");
   });
 });

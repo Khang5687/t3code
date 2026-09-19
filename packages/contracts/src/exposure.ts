@@ -21,32 +21,52 @@ const IPV4_PATTERN = new RegExp(`^(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}$`);
 export const Ipv4Address = Schema.String.check(Schema.isPattern(IPV4_PATTERN));
 export type Ipv4Address = typeof Ipv4Address.Type;
 
+const IPV4_CIDR_PATTERN = new RegExp(`^(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}/(?:3[0-2]|[12]?\\d)$`);
+export const Ipv4Cidr = Schema.String.check(Schema.isPattern(IPV4_CIDR_PATTERN));
+export type Ipv4Cidr = typeof Ipv4Cidr.Type;
+
+/** One entry of the peer allowlist: a bare address (host route) or a CIDR block. */
+export const AllowedPeer = Schema.Union([Ipv4Address, Ipv4Cidr]);
+export type AllowedPeer = typeof AllowedPeer.Type;
+
 export interface ListenInterfaces {
   readonly kinds: ReadonlyArray<ListenInterfaceKind>;
   readonly addresses: ReadonlyArray<Ipv4Address>;
+  /**
+   * Peers allowed to open a connection at all, enforced on the accepted socket
+   * before any HTTP byte is read. Absent means "no restriction beyond the
+   * bind", which is the behaviour every selection had before the field existed;
+   * an empty request normalizes back to absent so there is one spelling of it.
+   */
+  readonly allowedPeers?: ReadonlyArray<AllowedPeer>;
 }
 
 export interface ListenInterfacesInput {
   readonly kinds: ReadonlyArray<ListenInterfaceKind>;
   readonly addresses?: ReadonlyArray<Ipv4Address>;
+  readonly allowedPeers?: ReadonlyArray<AllowedPeer>;
 }
 
 export const normalizeListenInterfaces = (input: ListenInterfacesInput): ListenInterfaces => {
   const requested = new Set(input.kinds);
+  const allowedPeers = [...new Set(input.allowedPeers ?? [])];
   return {
     kinds: LISTEN_INTERFACE_KIND_ORDER.filter((kind) => kind === "loopback" || requested.has(kind)),
     addresses: [...new Set(input.addresses ?? [])],
+    ...(allowedPeers.length > 0 ? { allowedPeers } : {}),
   };
 };
 
 const NormalizedListenInterfaces = Schema.Struct({
   kinds: Schema.Array(ListenInterfaceKind),
   addresses: Schema.Array(Ipv4Address),
+  allowedPeers: Schema.optionalKey(Schema.Array(AllowedPeer)),
 });
 
 export const ListenInterfaces = Schema.Struct({
   kinds: Schema.Array(ListenInterfaceKind),
   addresses: Schema.optionalKey(Schema.Array(Ipv4Address)),
+  allowedPeers: Schema.optionalKey(Schema.Array(AllowedPeer)),
 }).pipe(
   Schema.decodeTo(
     NormalizedListenInterfaces,
@@ -61,6 +81,11 @@ export const ListenInterfaces = Schema.Struct({
 // the token to `never` on its false branch, which the checks below still read.
 export const isIpv4Address = (token: string): boolean => IPV4_PATTERN.test(token);
 
+export const isIpv4Cidr = (token: string): boolean => IPV4_CIDR_PATTERN.test(token);
+
+/** `allow:` marks a peer-allowlist entry so it cannot be read as a bind address. */
+const ALLOWED_PEER_PREFIX = "allow:";
+
 const isListenInterfaceKind = (token: string): token is ListenInterfaceKind =>
   (LISTEN_INTERFACE_KIND_ORDER as ReadonlyArray<string>).includes(token);
 
@@ -74,7 +99,7 @@ const isLegacyHostToken = (token: string): boolean =>
   isIpv4Address(token) || IPV6_PATTERN.test(token) || token === "localhost";
 
 export const LISTEN_HOST_ACCEPTED_FORMS =
-  "an interface kind (loopback, tailnet, lan), an IPv4 address, or a single host to bind verbatim (for example 127.0.0.1, 0.0.0.0, ::1, or localhost). Combine kinds and addresses with commas, or repeat --host.";
+  "an interface kind (loopback, tailnet, lan), an IPv4 address, an allow:<ip|cidr> peer entry, or a single host to bind verbatim (for example 127.0.0.1, 0.0.0.0, ::1, or localhost). Combine kinds and addresses with commas, or repeat --host.";
 
 /**
  * What one `--host` value (or `T3CODE_HOST`, or the bootstrap envelope's host)
@@ -83,7 +108,16 @@ export const LISTEN_HOST_ACCEPTED_FORMS =
  * commas before parsing, so they union here.
  */
 export type ListenHostSelection =
-  | { readonly _tag: "legacy"; readonly host: string | undefined }
+  | {
+      readonly _tag: "legacy";
+      readonly host: string | undefined;
+      /**
+       * Present only when `allow:` entries accompanied a verbatim host. A
+       * verbatim bind is not enforced against (the resolver warns instead), but
+       * the request is kept so the warning can name what was dropped.
+       */
+      readonly allowedPeers?: ReadonlyArray<AllowedPeer>;
+    }
   | { readonly _tag: "interfaces"; readonly interfaces: ListenInterfaces }
   | { readonly _tag: "invalid"; readonly token: string; readonly message: string };
 
@@ -97,10 +131,37 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
     return { _tag: "legacy", host: undefined };
   }
 
-  const [only] = tokens;
-  if (tokens.length === 1 && only !== undefined && !isListenInterfaceKind(only)) {
+  // Peer entries are split out first: they never name something to bind, so the
+  // "is the rest a single verbatim host" question is asked without them.
+  const allowedPeers: Array<AllowedPeer> = [];
+  const bindTokens: Array<string> = [];
+  for (const token of tokens) {
+    if (!token.startsWith(ALLOWED_PEER_PREFIX)) {
+      bindTokens.push(token);
+      continue;
+    }
+    const peer = token.slice(ALLOWED_PEER_PREFIX.length);
+    if (!isIpv4Address(peer) && !isIpv4Cidr(peer)) {
+      return {
+        _tag: "invalid",
+        token,
+        message: `Unknown --host value "${token}". Expected an IPv4 address or CIDR after allow:, for example allow:10.0.0.0/8.`,
+      };
+    }
+    allowedPeers.push(peer);
+  }
+
+  const peers = allowedPeers.length > 0 ? { allowedPeers } : {};
+
+  if (bindTokens.length === 0) {
+    // `--allow-peer` on its own: loopback is the bind every selection carries.
+    return { _tag: "interfaces", interfaces: normalizeListenInterfaces({ kinds: [], ...peers }) };
+  }
+
+  const [only] = bindTokens;
+  if (bindTokens.length === 1 && only !== undefined && !isListenInterfaceKind(only)) {
     return isLegacyHostToken(only)
-      ? { _tag: "legacy", host: only }
+      ? { _tag: "legacy", host: only, ...peers }
       : {
           _tag: "invalid",
           token: only,
@@ -110,7 +171,7 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
 
   const kinds: Array<ListenInterfaceKind> = [];
   const addresses: Array<Ipv4Address> = [];
-  for (const token of tokens) {
+  for (const token of bindTokens) {
     if (isListenInterfaceKind(token)) {
       kinds.push(token);
     } else if (isIpv4Address(token)) {
@@ -124,7 +185,10 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
     }
   }
 
-  return { _tag: "interfaces", interfaces: normalizeListenInterfaces({ kinds, addresses }) };
+  return {
+    _tag: "interfaces",
+    interfaces: normalizeListenInterfaces({ kinds, addresses, ...peers }),
+  };
 };
 
 /**
@@ -134,7 +198,11 @@ export const parseListenHostSelection = (raw: string | undefined): ListenHostSel
  * `loopback`, so the value is never a bare legacy token.
  */
 export const formatListenInterfaces = (selection: ListenInterfaces): string =>
-  [...selection.kinds, ...selection.addresses].join(",");
+  [
+    ...selection.kinds,
+    ...selection.addresses,
+    ...(selection.allowedPeers ?? []).map((peer) => `${ALLOWED_PEER_PREFIX}${peer}`),
+  ].join(",");
 
 const sameMembers = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => {
   if (a.length !== b.length) {
@@ -153,7 +221,11 @@ const sameMembers = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolea
 export const listenInterfacesEqual = (a: ListenInterfaces, b: ListenInterfaces): boolean => {
   const left = normalizeListenInterfaces(a);
   const right = normalizeListenInterfaces(b);
-  return sameMembers(left.kinds, right.kinds) && sameMembers(left.addresses, right.addresses);
+  return (
+    sameMembers(left.kinds, right.kinds) &&
+    sameMembers(left.addresses, right.addresses) &&
+    sameMembers(left.allowedPeers ?? [], right.allowedPeers ?? [])
+  );
 };
 
 export const ExposurePreset = Schema.Literals(["local-only", "tailscale-only", "lan", "custom"]);

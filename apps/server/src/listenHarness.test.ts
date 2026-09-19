@@ -225,3 +225,89 @@ describe.skipIf(runnerTailnet === undefined)(
     );
   },
 );
+
+/**
+ * One raw request, and every byte the server sent back before the socket
+ * closed. A rejected peer is destroyed before the HTTP parser runs, so the
+ * proof it was rejected is an empty string rather than a status line.
+ */
+const rawExchange = (port: number, request: string): Effect.Effect<string> =>
+  Effect.callback<string>((resume) => {
+    const socket = NodeNet.connect({ host: "127.0.0.1", port });
+    const chunks: Array<Buffer> = [];
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      resume(Effect.succeed(Buffer.concat(chunks).toString("utf8")));
+    };
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.once("connect", () => socket.write(request));
+    // A reset arrives as an error on some platforms and a plain close on
+    // others; either way the exchange is over.
+    socket.once("error", settle);
+    socket.once("close", settle);
+    return Effect.sync(() => socket.destroy());
+  });
+
+const getSession = "GET /api/auth/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+const wsUpgrade =
+  "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+
+// The resolver always seeds 127.0.0.0/8, so no real selection can reject the
+// loopback these tests connect from. The override is the only way to exercise
+// the rejection path in process.
+describe("listen harness peer allowlist (Seam 1)", () => {
+  it.live("serves a peer that is on the allowlist", () =>
+    Effect.gen(function* () {
+      const harness = yield* startListenHarness({ allowedPeersOverride: ["127.0.0.0/8"] });
+
+      expect(harness.listen.bindHosts).toEqual(["127.0.0.1"]);
+      expect(yield* harness.readAuthPolicy).toBe("loopback-browser");
+      expect(yield* rawExchange(harness.port, getSession)).toContain("HTTP/1.1 200");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("destroys a peer that is not on it, without sending a byte", () =>
+    Effect.gen(function* () {
+      const harness = yield* startListenHarness({ allowedPeersOverride: ["10.0.0.0/8"] });
+
+      expect(yield* rawExchange(harness.port, getSession)).toBe("");
+      // Not a refused connect: the listener still accepts, then drops the peer.
+      expect(yield* harness.probe("127.0.0.1")).not.toEqual({ outcome: "refuse" });
+      expect(yield* Effect.flip(harness.readAuthPolicy)).toBeDefined();
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("refuses a websocket upgrade from a peer that is not on the allowlist", () =>
+    Effect.gen(function* () {
+      const harness = yield* startListenHarness({ allowedPeersOverride: ["10.0.0.0/8"] });
+
+      expect(yield* rawExchange(harness.port, wsUpgrade)).toBe("");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("serves a v4-mapped peer, which is how a dual-stack bind reports one", () =>
+    Effect.gen(function* () {
+      // Connecting to 127.0.0.1 through a `::` listener makes Node report the
+      // peer as `::ffff:127.0.0.1`; the guard has to read that as IPv4.
+      const harness = yield* startListenHarness({
+        host: "::",
+        allowedPeersOverride: ["127.0.0.0/8"],
+      });
+
+      expect(yield* rawExchange(harness.port, getSession)).toContain("HTTP/1.1 200");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("enforces nothing when no allowlist was configured", () =>
+    Effect.gen(function* () {
+      const harness = yield* startListenHarness();
+
+      expect(harness.listen.allowedPeers).toBeUndefined();
+      expect(yield* rawExchange(harness.port, getSession)).toContain("HTTP/1.1 200");
+    }).pipe(Effect.scoped),
+  );
+});

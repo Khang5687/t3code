@@ -32,6 +32,7 @@ import {
   httpCompressionLayer,
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
+import { guardPeerAllowlist } from "./peerAllowlist.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -283,8 +284,24 @@ export const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const listen = yield* ListenAddress.ListenAddress;
+    const runFork = Effect.runForkWith(yield* Effect.context<never>());
+    const allowedPeers = listen.allowedPeers;
+    // Undefined means no allowlist was asked for, and an unguarded server is
+    // exactly what every selection got before the field existed.
+    const createServer = () => {
+      const server = guardHttpResponseWriteErrors(NodeHttp.createServer());
+      return allowedPeers === undefined
+        ? server
+        : guardPeerAllowlist(server, allowedPeers, (address) => {
+            runFork(
+              Effect.logWarning(
+                `rejected connection from ${address}: not in the peer allowlist (${allowedPeers.join(", ")})`,
+              ),
+            );
+          });
+    };
     const makeNodeServer = (host: string, port: number) =>
-      NodeHttpServer.make(() => guardHttpResponseWriteErrors(NodeHttp.createServer()), {
+      NodeHttpServer.make(createServer, {
         host,
         port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,

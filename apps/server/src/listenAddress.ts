@@ -1,6 +1,12 @@
 import * as NodeOS from "node:os";
 
-import { type ListenInterfaces, parseListenHostSelection } from "@t3tools/contracts";
+import {
+  type AllowedPeer,
+  isIpv4Address,
+  type ListenInterfaceKind,
+  type ListenInterfaces,
+  parseListenHostSelection,
+} from "@t3tools/contracts";
 import { LOOPBACK_LISTEN_ADDRESS, resolveListenAddresses } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -34,7 +40,51 @@ export interface ResolvedListenAddress {
   readonly connectionHost: string;
   /** Why the bind differs from what was asked for; surfaced in runtime state and startup output. */
   readonly warnings: ReadonlyArray<string>;
+  /**
+   * CIDR blocks a peer must fall inside to get its socket accepted, or
+   * `undefined` for no enforcement beyond the bind. Undefined whenever the
+   * selection asked for no allowlist, so an untouched config keeps the exact
+   * behaviour it had before the field existed.
+   */
+  readonly allowedPeers: ReadonlyArray<string> | undefined;
 }
+
+export const LOOPBACK_PEER_CIDR = "127.0.0.0/8";
+
+/**
+ * What each selected kind implies about who may connect. Applied on top of the
+ * user's list rather than baked into the preset, so a preset stays a statement
+ * about interfaces only.
+ */
+const KIND_PEER_CIDRS: Record<ListenInterfaceKind, ReadonlyArray<string>> = {
+  loopback: [LOOPBACK_PEER_CIDR],
+  tailnet: ["100.64.0.0/10"],
+  lan: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+};
+
+/**
+ * The list the socket guard enforces: what the user asked for, widened by the
+ * default range of every selected kind and by a host route for each explicit
+ * bind address, with loopback always present so the machine can never lock
+ * itself out of its own server (ADR 0003).
+ */
+const effectiveAllowedPeers = (
+  requested: ReadonlyArray<AllowedPeer>,
+  kinds: ReadonlyArray<ListenInterfaceKind>,
+  addresses: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const cidrs = new Set<string>([LOOPBACK_PEER_CIDR]);
+  for (const peer of requested) {
+    cidrs.add(peer.includes("/") ? peer : `${peer}/32`);
+  }
+  for (const kind of kinds) {
+    for (const cidr of KIND_PEER_CIDRS[kind]) cidrs.add(cidr);
+  }
+  for (const address of addresses) {
+    cidrs.add(`${address}/32`);
+  }
+  return [...cidrs];
+};
 
 export const isLoopbackHost = (host: string | undefined): boolean => {
   if (!host || host.length === 0) {
@@ -113,6 +163,10 @@ const resolveFromInterfaces = (
     urlHost: formatHostForUrl(resolved.addresses[0]),
     connectionHost: remote ?? LOOPBACK_LISTEN_ADDRESS,
     warnings: resolved.warnings,
+    allowedPeers:
+      selection.allowedPeers === undefined
+        ? undefined
+        : effectiveAllowedPeers(selection.allowedPeers, selection.kinds, selection.addresses),
   };
 };
 
@@ -129,19 +183,45 @@ export const resolveListenAddress = (
   // `T3CODE_HOST`, bootstrap envelope -- rejects an unparseable host before it
   // reaches here, so `invalid` only arrives from a direct call. Binding it and
   // letting the socket complain beats throwing from a pure resolver.
-  const kind: ListenAddressKind = isWildcardHost(host)
+  // `allow:` entries are stripped by the parser, so the host to bind is the
+  // parsed one; `host` itself still holds everything that was configured.
+  const verbatimHost = parsed._tag === "legacy" ? parsed.host : host;
+  const kind: ListenAddressKind = isWildcardHost(verbatimHost)
     ? "wildcard"
-    : isLoopbackHost(host)
+    : isLoopbackHost(verbatimHost)
       ? "loopback"
       : "explicit";
+  // A verbatim host says "bind exactly this", so the bind is never narrowed to
+  // match the allowlist. The allowlist is still enforced on the accepted
+  // socket: asking for one and silently getting none is the failure mode worth
+  // avoiding. A wildcard bind plus an allowlist is legal but surprising enough
+  // to warn about, since the listener is on every NIC and only the guard is
+  // keeping strangers out.
+  const requestedPeers = parsed._tag === "legacy" ? (parsed.allowedPeers ?? []) : [];
+  const boundAddress =
+    verbatimHost !== undefined && !isWildcardHost(verbatimHost) && isIpv4Address(verbatimHost)
+      ? [verbatimHost]
+      : [];
   return {
     kind,
-    bindHosts: [host ?? LOOPBACK_LISTEN_ADDRESS],
+    bindHosts: [verbatimHost ?? LOOPBACK_LISTEN_ADDRESS],
     remoteReachable: kind !== "loopback",
     configuredHost: host,
-    urlHost: host !== undefined && kind !== "wildcard" ? formatHostForUrl(host) : undefined,
-    connectionHost: resolveConnectionHost(host, interfaces),
-    warnings: [],
+    urlHost:
+      verbatimHost !== undefined && kind !== "wildcard"
+        ? formatHostForUrl(verbatimHost)
+        : undefined,
+    connectionHost: resolveConnectionHost(verbatimHost, interfaces),
+    warnings:
+      requestedPeers.length > 0 && kind === "wildcard"
+        ? [
+            `host ${verbatimHost} listens on every interface; only the peer allowlist (${requestedPeers.join(", ")}) keeps other machines out`,
+          ]
+        : [],
+    allowedPeers:
+      requestedPeers.length > 0
+        ? effectiveAllowedPeers(requestedPeers, [], boundAddress)
+        : undefined,
   };
 };
 

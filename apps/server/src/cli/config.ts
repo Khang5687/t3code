@@ -61,6 +61,16 @@ const hostFlag = Flag.string("host").pipe(
     },
   ),
 );
+// Peers reach the resolver as `allow:` entries on the listen selection, so the
+// desktop's bootstrap envelope and `T3CODE_HOST` carry an allowlist through the
+// one channel that already exists instead of growing a parallel one.
+const allowPeerFlag = Flag.string("allow-peer").pipe(
+  Flag.withDescription(
+    "Restrict who may connect to the bound interfaces: an IPv4 address or CIDR (for example 10.0.0.0/8). Repeatable. Loopback is always allowed.",
+  ),
+  Flag.atLeast(0),
+);
+
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
     "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
@@ -144,6 +154,15 @@ const EnvServerConfig = Config.all({
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  allowedPeers: Config.string("T3CODE_ALLOWED_PEERS").pipe(
+    Config.withDefault(""),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ),
+  ),
   devAllowedOrigins: Config.string("T3CODE_DEV_ALLOWED_ORIGINS").pipe(
     Config.withDefault(""),
     Config.map((value) =>
@@ -215,6 +234,8 @@ export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
+  /** Optional so callers that build flags by hand keep compiling without one. */
+  readonly allowedPeers?: ReadonlyArray<string>;
   readonly baseDir: Option.Option<string>;
   readonly cwd: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
@@ -244,6 +265,7 @@ export const sharedServerCommandFlags = {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
+  allowedPeers: allowPeerFlag,
   baseDir: baseDirFlag,
   cwd: Argument.string("cwd").pipe(
     Argument.withDescription(
@@ -292,6 +314,7 @@ export const resolveServerConfig = (
       mode: flags.mode ?? Option.none(),
       port: flags.port ?? Option.none(),
       host: flags.host ?? Option.none(),
+      allowedPeers: flags.allowedPeers ?? [],
       baseDir: flags.baseDir ?? Option.none(),
       cwd: flags.cwd ?? Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
@@ -409,7 +432,7 @@ export const resolveServerConfig = (
       () => 443,
     );
     const staticDir = devUrl ? undefined : yield* ServerConfig.resolveStaticDir();
-    const host = Option.getOrElse(
+    const selectedHost = Option.getOrElse(
       resolveOptionPrecedence(
         normalizedFlags.host,
         Option.fromUndefinedOr(env.host),
@@ -417,8 +440,21 @@ export const resolveServerConfig = (
       ),
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
-    // `--host` is validated by its flag; `T3CODE_HOST` and the bootstrap
-    // envelope reach here unchecked, so the same parser gates them too.
+    // Same precedence as `--host`: the flag wins, then the environment. The
+    // bootstrap envelope needs no entry of its own because the desktop spells
+    // its peers into the host it sends.
+    const requestedPeers =
+      normalizedFlags.allowedPeers.length > 0 ? normalizedFlags.allowedPeers : env.allowedPeers;
+    const host =
+      requestedPeers.length === 0
+        ? selectedHost
+        : [
+            ...(selectedHost === undefined ? [] : [selectedHost]),
+            ...requestedPeers.map((peer) => `allow:${peer}`),
+          ].join(",");
+    // `--host` is validated by its flag; `T3CODE_HOST`, `--allow-peer`,
+    // `T3CODE_ALLOWED_PEERS` and the bootstrap envelope reach here unchecked,
+    // so the same parser gates them too.
     const hostSelection = parseListenHostSelection(host);
     if (hostSelection._tag === "invalid") {
       return yield* new InvalidListenHostError({
