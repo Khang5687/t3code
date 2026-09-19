@@ -20,6 +20,7 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
+import { isWslProcess } from "@t3tools/tailscale";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -208,7 +209,7 @@ function shouldUseWindowsHostFromWsl(
 ): boolean {
   return (
     platform === "linux" &&
-    (env.WSL_DISTRO_NAME !== undefined || env.WSL_INTEROP !== undefined) &&
+    isWslProcess(env) &&
     env.SSH_CONNECTION === undefined &&
     env.SSH_TTY === undefined &&
     env.container === undefined

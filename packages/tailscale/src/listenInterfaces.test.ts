@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveListenAddresses, type NetworkInterfaceMap } from "./listenInterfaces.ts";
+import {
+  detectWslNetworking,
+  resolveListenAddresses,
+  type NetworkInterfaceMap,
+} from "./listenInterfaces.ts";
 
 const lo = { address: "127.0.0.1", family: "IPv4", internal: true } as const;
 const lo6 = { address: "::1", family: "IPv6", internal: true } as const;
@@ -121,5 +125,73 @@ describe("resolveListenAddresses", () => {
     const result = resolveListenAddresses(select(["loopback"]), {});
     expect(result.warnings).toEqual([]);
     expect(result.loopbackOnly).toBe(false);
+  });
+
+  it("keeps the plain tailnet warning when not under WSL", () => {
+    const result = resolveListenAddresses(select(["loopback", "lan", "tailnet"]), {
+      lo0: [lo],
+      en0: [en0],
+    });
+    expect(result.warnings).toEqual(["tailnet selected but no Tailscale address was found"]);
+  });
+});
+
+const wslNat: NetworkInterfaceMap = {
+  lo: [lo],
+  eth0: [{ address: "172.28.240.3", family: "IPv4", internal: false }],
+};
+const wslMirrored: NetworkInterfaceMap = {
+  lo: [lo],
+  loopback0: [lo],
+  eth0: [en0],
+};
+const wslEnv = { WSL_DISTRO_NAME: "Ubuntu" };
+
+describe("detectWslNetworking", () => {
+  it("reads a NAT distro from its 172.16.0.0/12 address", () => {
+    expect(detectWslNetworking(wslNat, wslEnv)).toBe("nat");
+  });
+
+  it("reads a mirrored distro from the loopback0 interface", () => {
+    expect(detectWslNetworking(wslMirrored, wslEnv)).toBe("mirrored");
+  });
+
+  it("is not-wsl without a WSL signal, whatever the interfaces look like", () => {
+    expect(detectWslNetworking(wslNat, {})).toBe("not-wsl");
+  });
+
+  it("falls back to the kernel release when the env lost the WSL variables", () => {
+    expect(detectWslNetworking(wslNat, {}, () => "5.15.167.4-microsoft-standard-WSL2")).toBe("nat");
+  });
+
+  it("reports unknown for a distro whose addresses match neither shape", () => {
+    expect(detectWslNetworking(interfaces, wslEnv)).toBe("unknown");
+    expect(detectWslNetworking({ lo: [lo] }, wslEnv)).toBe("unknown");
+  });
+});
+
+describe("resolveListenAddresses under WSL", () => {
+  it("warns that a NAT lan bind only reaches the Windows host", () => {
+    const result = resolveListenAddresses(select(["loopback", "lan"]), wslNat, "nat");
+    expect(result.addresses).toEqual(["127.0.0.1", "172.28.240.3"]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("172.28.240.3");
+    expect(result.warnings[0]).toContain("networkingMode=mirrored");
+  });
+
+  it("warns the same way when the mode could not be read", () => {
+    const result = resolveListenAddresses(select(["loopback", "lan"]), wslNat, "unknown");
+    expect(result.warnings[0]).toContain("WSL2 NAT networking");
+  });
+
+  it("stays quiet about the lan bind under mirrored networking", () => {
+    expect(
+      resolveListenAddresses(select(["loopback", "lan"]), wslMirrored, "mirrored").warnings,
+    ).toEqual([]);
+  });
+
+  it("points a missing tailnet at the distro rather than the machine", () => {
+    const result = resolveListenAddresses(select(["loopback", "tailnet"]), wslNat, "nat");
+    expect(result.warnings[0]).toContain("not running inside this WSL distro");
   });
 });

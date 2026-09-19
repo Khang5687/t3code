@@ -232,3 +232,39 @@ describe("resolveListenAddress peer allowlist", () => {
     );
   });
 });
+
+const wslNatInterfaces: NetworkInterfacesMap = {
+  lo: [ipv4("127.0.0.1", true)],
+  eth0: [ipv4("172.28.240.3", false)],
+};
+
+describe("resolveListenAddress under WSL", () => {
+  it("still binds the WSL address but says who can reach it", () => {
+    const listen = resolveListenAddress("lan", wslNatInterfaces, "nat");
+
+    expect(listen.bindHosts).toEqual(["127.0.0.1", "172.28.240.3"]);
+    expect(listen.remoteReachable).toBe(true);
+    expect(listen.warnings).toHaveLength(1);
+    expect(listen.warnings[0]).toContain("only reachable from the Windows host");
+  });
+
+  it("sends a missing tailnet to the distro, not the machine", () => {
+    const listen = resolveListenAddress("tailnet", wslNatInterfaces, "nat");
+
+    expect(listen.warnings.some((warning) => /inside this WSL distro/i.test(warning))).toBe(true);
+  });
+
+  it("leaves a mirrored distro alone", () => {
+    expect(
+      resolveListenAddress(
+        "lan",
+        { lo: [ipv4("127.0.0.1", true)], loopback0: [], eth0: [ipv4("192.168.1.42", false)] },
+        "mirrored",
+      ).warnings,
+    ).toEqual([]);
+  });
+
+  it("adds nothing when the server is not in WSL", () => {
+    expect(resolveListenAddress("lan", externalIpv4Interfaces, "not-wsl").warnings).toEqual([]);
+  });
+});

@@ -54,6 +54,14 @@ single address still works: `t3 serve --host <private-ip>`. When you ask for
 the tailnet and Tailscale is not running, the server starts on loopback only and
 says so.
 
+Inside WSL, `lan` and `tailnet` mean what the distro can see. With WSL's default
+NAT networking the distro has its own virtual network, so the address `lan`
+picks reaches the Windows host and nothing else, and `tailnet` finds nothing
+unless Tailscale runs in the distro. T3 Code says which of the two you hit when
+it starts. To serve the real network from a distro, set `networkingMode=mirrored`
+in `%UserProfile%\.wslconfig` on the Windows side and run `wsl --shutdown`, or
+run T3 Code on Windows instead.
+
 If a server is already running, generate a fresh link without restarting it:
 
 ```bash

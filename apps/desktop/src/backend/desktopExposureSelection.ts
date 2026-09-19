@@ -9,6 +9,7 @@ import {
   type ListenInterfacesInput,
 } from "@t3tools/contracts";
 import {
+  detectWslNetworking,
   isTailscaleIpv4Address,
   resolveListenAddresses,
   LOOPBACK_LISTEN_ADDRESS,
@@ -53,7 +54,14 @@ export const resolveDesktopExposure = (input: {
   readonly advertisedHostOverride?: string;
 }): DesktopExposureResolution => {
   const requested = normalizeListenInterfaces(input.requested);
-  const resolved = resolveListenAddresses(requested, input.networkInterfaces);
+  // Only true when the desktop itself runs inside a distro (WSLg). A Windows
+  // desktop reads Windows' interfaces here and its WSL backend resolves the
+  // same selection again in the distro, where it does its own detection.
+  const resolved = resolveListenAddresses(
+    requested,
+    input.networkInterfaces,
+    detectWslNetworking(input.networkInterfaces, process.env),
+  );
   const tailnetSelected = requested.kinds.includes("tailnet");
   // Serve and the tailnet endpoints need a real tailnet address, not just the
   // kind. The `lan` preset carries `tailnet`, so gating on the kind alone would

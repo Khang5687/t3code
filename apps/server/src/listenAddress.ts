@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import {
@@ -7,7 +9,12 @@ import {
   type ListenInterfaces,
   parseListenHostSelection,
 } from "@t3tools/contracts";
-import { LOOPBACK_LISTEN_ADDRESS, resolveListenAddresses } from "@t3tools/tailscale";
+import {
+  detectWslNetworking,
+  LOOPBACK_LISTEN_ADDRESS,
+  resolveListenAddresses,
+  type WslNetworking,
+} from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -55,6 +62,10 @@ export const LOOPBACK_PEER_CIDR = "127.0.0.0/8";
  * What each selected kind implies about who may connect. Applied on top of the
  * user's list rather than baked into the preset, so a preset stays a statement
  * about interfaces only.
+ *
+ * WSL needs nothing extra here: under NAT networking the Windows host reaches
+ * the distro through the 172.16.0.0/12 gateway on the Hyper-V switch, which
+ * `lan` already covers.
  */
 const KIND_PEER_CIDRS: Record<ListenInterfaceKind, ReadonlyArray<string>> = {
   loopback: [LOOPBACK_PEER_CIDR],
@@ -148,8 +159,9 @@ const resolveFromInterfaces = (
   host: string | undefined,
   selection: ListenInterfaces,
   interfaces: NetworkInterfacesMap,
+  wsl: WslNetworking,
 ): ResolvedListenAddress => {
-  const resolved = resolveListenAddresses(selection, interfaces);
+  const resolved = resolveListenAddresses(selection, interfaces, wsl);
   // The resolver seeds loopback and applies the loopback-only fallback itself
   // (ADR 0003), so its list is final and never empty; all that is left here is
   // picking the address remote clients dial.
@@ -170,13 +182,23 @@ const resolveFromInterfaces = (
   };
 };
 
+/** WSL kernels say so in their release string; unreadable means not WSL. */
+const readOsRelease = (path: string): string | undefined => {
+  try {
+    return NodeFS.readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
 export const resolveListenAddress = (
   host: string | undefined,
   interfaces: NetworkInterfacesMap = NodeOS.networkInterfaces(),
+  wsl: WslNetworking = detectWslNetworking(interfaces, process.env, readOsRelease),
 ): ResolvedListenAddress => {
   const parsed = parseListenHostSelection(host);
   if (parsed._tag === "interfaces") {
-    return resolveFromInterfaces(host, parsed.interfaces, interfaces);
+    return resolveFromInterfaces(host, parsed.interfaces, interfaces, wsl);
   }
 
   // `legacy` and `invalid` both bind the value verbatim. Every CLI path -- flag,
