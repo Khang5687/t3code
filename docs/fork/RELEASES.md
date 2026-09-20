@@ -90,6 +90,21 @@ read-only under **Settings > pxpipe**.
 Details and the identity rules: [ADR
 0002](../adr/0002-skill-identity-and-t3-only-disable.md).
 
+**Queue and steer are two different things.** Upstream's queue held a message
+in the web client until the agent's next tool call and then sent it as a steer,
+so Queue and Steer were the same thing one tool call apart, and the queue died
+on reload or thread switch. Now a queued message is server state: it waits as a
+dashed bubble at the end of the thread, starts a turn of its own once the
+running turn ends, and several queued messages run one after another, one turn
+each, in order. It survives a reload, a thread switch, and a closed tab, and
+every client on the thread shows the same rows. Steer sends into the running
+turn at once. Enter queues, `mod+Enter` steers, and **Settings > General >
+Follow-up behavior** flips the default. Stop, a failed turn, and a pending
+approval or question hold the queue; held rows wait for **Send now**, so a queue
+never fires into a session that needs you first. **Remove** puts the text back
+in the composer. Mobile shows the rows and can remove them. Provider adapters
+are untouched. See [Composer](../user/composer.md#send-while-the-agent-is-working).
+
 ### Upstream-bound changes
 
 One fix in this build is written against upstream and is waiting on upstream,
@@ -149,6 +164,12 @@ same way upstream does.
 - Mobile cannot start, stop, or configure a sidecar.
 - The first pxpipe start needs network access to install the pinned version.
   Later starts work offline.
+- Removing a queued message restores its attachments only on the client that
+  queued it; from another client or after a reload you get the text back and a
+  note that the attachments stayed behind.
+- Mobile can see and remove queued messages but cannot send one early.
+- A queued message runs under whatever model and mode the thread has when it
+  drains, not what was selected when it was queued.
 
 ### Updating from upstream
 
