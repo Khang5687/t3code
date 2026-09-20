@@ -133,15 +133,21 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     if (
       canonicalCommand.type !== "thread.turn.start" &&
+      canonicalCommand.type !== "thread.turn.queue" &&
       canonicalCommand.type !== "thread.user-input.respond"
     ) {
       return canonicalCommand as OrchestrationCommand;
     }
 
-    const attachments =
-      canonicalCommand.type === "thread.turn.start"
-        ? canonicalCommand.message.attachments
-        : Object.values(canonicalCommand.attachmentsByQuestionId ?? {}).flat();
+    // A queued message owns its uploads from the moment it is queued, so it
+    // normalizes exactly like a turn start: same claim, same rename, same
+    // context rebinding. Nothing is left for the drain to resolve.
+    const carriesTurnMessage =
+      canonicalCommand.type === "thread.turn.start" ||
+      canonicalCommand.type === "thread.turn.queue";
+    const attachments = carriesTurnMessage
+      ? canonicalCommand.message.attachments
+      : Object.values(canonicalCommand.attachmentsByQuestionId ?? {}).flat();
     if (
       canonicalCommand.type === "thread.user-input.respond" &&
       attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS
@@ -150,7 +156,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         message: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per question response.`,
       });
     }
-    if (canonicalCommand.type === "thread.turn.start") {
+    if (carriesTurnMessage) {
       const clientAttachmentIds = new Set<string>();
       for (const attachment of attachments) {
         if (attachment.id === undefined) continue;
@@ -344,13 +350,13 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
   "Normalizer.cleanupFailedUploadedAttachments",
 )(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
   const originalAttachments =
-    command.type === "thread.turn.start"
+    command.type === "thread.turn.start" || command.type === "thread.turn.queue"
       ? command.message.attachments
       : command.type === "thread.user-input.respond"
         ? Object.values(command.attachmentsByQuestionId ?? {}).flat()
         : [];
   const normalizedAttachments =
-    normalizedCommand.type === "thread.turn.start"
+    normalizedCommand.type === "thread.turn.start" || normalizedCommand.type === "thread.turn.queue"
       ? normalizedCommand.message.attachments
       : normalizedCommand.type === "thread.user-input.respond"
         ? Object.values(normalizedCommand.attachmentsByQuestionId ?? {}).flat()

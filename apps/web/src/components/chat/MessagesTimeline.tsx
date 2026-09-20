@@ -48,7 +48,7 @@ import {
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
-const EMPTY_QUEUED_MESSAGES: ReadonlyArray<QueuedComposerMessage> = [];
+const EMPTY_QUEUED_TURNS: ReadonlyArray<OrchestrationQueuedTurn> = [];
 const NOOP_QUEUED_MESSAGE_ACTION = (_id: string) => {};
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
@@ -133,9 +133,10 @@ import type {
   ComposerContextId,
   ComposerContextRecord,
   KnownComposerContextRecord,
+  OrchestrationQueuedTurn,
 } from "@t3tools/contracts";
 import { Button } from "../ui/button";
-import type { QueuedComposerMessage } from "../../queuedMessageStore";
+
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
@@ -299,9 +300,9 @@ interface TimelineRowSharedState {
   onCancelWorktreeSetup: (() => void) | null;
   onWorktreeSetupWorkLocally: (() => void) | null;
   onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
-  onSteerQueuedMessage: (id: string) => void;
-  steerQueuedMessageShortcutLabel: string | null;
-  onRemoveQueuedMessage: (id: string) => void;
+  onSendQueuedTurn: (messageId: string) => void;
+  sendQueuedTurnShortcutLabel: string | null;
+  onRemoveQueuedTurn: (messageId: string) => void;
 }
 
 interface TimelineRowActivityState {
@@ -463,10 +464,11 @@ interface MessagesTimelineProps {
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: CitationHistoryPage | null;
   /** Messages sent during the running turn. They render as ghost bubbles after the live rows. */
-  queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
-  onSteerQueuedMessage?: (id: string) => void;
-  steerQueuedMessageShortcutLabel?: string | null;
-  onRemoveQueuedMessage?: (id: string) => void;
+  queuedTurns?: ReadonlyArray<OrchestrationQueuedTurn>;
+  queuedTurnsAreSteers?: boolean;
+  onSendQueuedTurn?: (messageId: string) => void;
+  sendQueuedTurnShortcutLabel?: string | null;
+  onRemoveQueuedTurn?: (messageId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -520,10 +522,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
-  queuedMessages = EMPTY_QUEUED_MESSAGES,
-  onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
-  steerQueuedMessageShortcutLabel = null,
-  onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
+  queuedTurns = EMPTY_QUEUED_TURNS,
+  queuedTurnsAreSteers = false,
+  onSendQueuedTurn = NOOP_QUEUED_MESSAGE_ACTION,
+  sendQueuedTurnShortcutLabel = null,
+  onRemoveQueuedTurn = NOOP_QUEUED_MESSAGE_ACTION,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -783,7 +786,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         supportsConversationRollback,
         liveAgentTaskIds,
         worktreeSetup,
-        queuedMessages,
+        queuedTurns,
+        queuedTurnsAreSteers,
       },
       previous?.threadKey === listIdentityKey && previous.workspaceRoot === workspaceRoot
         ? previous.projection
@@ -806,7 +810,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     supportsConversationRollback,
     liveAgentTaskIds,
     worktreeSetup,
-    queuedMessages,
+    queuedTurns,
+    queuedTurnsAreSteers,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
@@ -1160,9 +1165,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
       onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
       onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
-      onSteerQueuedMessage,
-      steerQueuedMessageShortcutLabel,
-      onRemoveQueuedMessage,
+      onSendQueuedTurn,
+      sendQueuedTurnShortcutLabel,
+      onRemoveQueuedTurn,
     }),
     [
       readyCitationRequest,
@@ -1195,9 +1200,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onCancelWorktreeSetup,
       onWorktreeSetupWorkLocally,
       onOpenWorktreeSetupTerminal,
-      onSteerQueuedMessage,
-      steerQueuedMessageShortcutLabel,
-      onRemoveQueuedMessage,
+      onSendQueuedTurn,
+      sendQueuedTurnShortcutLabel,
+      onRemoveQueuedTurn,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1759,20 +1764,19 @@ function QueuedMessageTimelineRow({
   row: Extract<TimelineRow, { kind: "queued-message" }>;
 }) {
   const ctx = use(TimelineRowCtx);
-  const { queuedMessage } = row;
-  const attachmentCount = queuedMessage.images.length + queuedMessage.files.length;
-  const contextCount =
-    queuedMessage.terminalContexts.length +
-    queuedMessage.previewAnnotations.length +
-    queuedMessage.reviewComments.length;
-  const text = queuedMessage.prompt.trim();
-  const statusLabel = queuedMessage.holdUntilUserAction
+  const { queuedTurn } = row;
+  const attachmentCount = queuedTurn.attachments.length;
+  const contextCount = queuedTurn.context?.records.length ?? 0;
+  const text = queuedTurn.text.trim();
+  const statusLabel = queuedTurn.held
     ? "Waits for Send now"
     : row.isNext
-      ? "Sends after the next tool call or when the turn ends"
-      : "Sends after the messages above it";
+      ? "Starts its own turn when this one ends"
+      : "Starts its turn after the messages above it";
+  // While a turn runs, sending now goes into that turn instead of starting one.
+  const sendLabel = queuedTurn.held || !row.isSteer ? "Send now" : "Steer now";
   return (
-    <div className="flex flex-col items-end" data-queued-message-id={queuedMessage.id}>
+    <div className="flex flex-col items-end" data-queued-message-id={queuedTurn.messageId}>
       <div className="max-w-[80%] rounded-2xl border border-dashed border-border p-3 text-message-foreground/80">
         {text.length > 0 ? (
           <div className="whitespace-pre-wrap break-words text-sm">{text}</div>
@@ -1815,17 +1819,17 @@ function QueuedMessageTimelineRow({
                     variant="ghost-muted"
                     className="size-6"
                     onPointerDown={(event) => event.preventDefault()}
-                    onClick={() => ctx.onSteerQueuedMessage(queuedMessage.id)}
-                    aria-label="Send now"
+                    onClick={() => ctx.onSendQueuedTurn(queuedTurn.messageId)}
+                    aria-label={sendLabel}
                   />
                 }
               >
                 <ArrowUpIcon className="size-3.5" aria-hidden />
               </TooltipTrigger>
               <TooltipPopup side="bottom">
-                Send now
-                {row.isNext && ctx.steerQueuedMessageShortcutLabel
-                  ? ` (${ctx.steerQueuedMessageShortcutLabel})`
+                {sendLabel}
+                {row.isNext && ctx.sendQueuedTurnShortcutLabel
+                  ? ` (${ctx.sendQueuedTurnShortcutLabel})`
                   : null}
               </TooltipPopup>
             </Tooltip>
@@ -1838,7 +1842,7 @@ function QueuedMessageTimelineRow({
                     variant="ghost-muted"
                     className="size-6"
                     onPointerDown={(event) => event.preventDefault()}
-                    onClick={() => ctx.onRemoveQueuedMessage(queuedMessage.id)}
+                    onClick={() => ctx.onRemoveQueuedTurn(queuedTurn.messageId)}
                     aria-label="Cancel and return to the composer"
                   />
                 }

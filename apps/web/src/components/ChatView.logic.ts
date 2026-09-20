@@ -510,6 +510,7 @@ export function buildLocalDraftThread(
     pullRequests: [],
     activities: [],
     proposedPlans: [],
+    queuedTurns: [],
   };
 }
 
@@ -520,6 +521,7 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    queuedTurns: [],
     deletedAt: null,
   };
 }

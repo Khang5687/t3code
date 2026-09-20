@@ -50,6 +50,7 @@ const thread: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  queuedTurns: [],
   session: null,
 };
 const target = new PrimaryConnectionTarget({

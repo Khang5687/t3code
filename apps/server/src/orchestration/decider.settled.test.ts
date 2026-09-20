@@ -62,6 +62,7 @@ function makeReadModel(
         proposedPlans: [],
         activities,
         checkpoints: [],
+        queuedTurns: [],
         session,
       },
     ],

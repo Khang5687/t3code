@@ -987,6 +987,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    queuedTurns: [],
     pullRequests: [],
     createdAt: now,
     updatedAt: now,
@@ -1138,6 +1139,7 @@ describe("buildLoadingThreadFromShell", () => {
       proposedPlans: [],
       activities: [],
       checkpoints: [],
+      queuedTurns: [],
     });
   });
 });

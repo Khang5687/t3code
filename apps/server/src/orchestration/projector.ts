@@ -9,6 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   isImportedAgentSessionMessageId,
+  sessionStatusHoldsQueuedTurns,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -53,6 +54,8 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnQueuedPayload,
+  ThreadTurnQueueRemovedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -446,6 +449,7 @@ export function projectEvent(
             messages: [],
             activities: [],
             checkpoints: [],
+            queuedTurns: [],
             session: null,
           },
           event.type,
@@ -832,10 +836,16 @@ export function projectEvent(
         // Leaving the "running" session status is the turn-end signal: settle
         // a still-running latest turn so its duration reflects the whole turn.
         const settledTurnState = settledTurnStateForSessionStatus(session.status);
+        // A stopped, failed, or dead session holds the queue: the rows stay put
+        // and wait for Send now rather than firing into a broken session.
+        const queuedTurns = sessionStatusHoldsQueuedTurns(session.status)
+          ? thread.queuedTurns.map((entry) => (entry.held ? entry : { ...entry, held: true }))
+          : thread.queuedTurns;
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            queuedTurns,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {
@@ -867,6 +877,55 @@ export function projectEvent(
                       completedAt: session.updatedAt,
                     }
                   : thread.latestTurn,
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-queued":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadTurnQueuedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            queuedTurns: [
+              ...thread.queuedTurns.filter(
+                (entry) => entry.messageId !== payload.queuedTurn.messageId,
+              ),
+              payload.queuedTurn,
+            ],
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-queue-removed":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadTurnQueueRemovedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            queuedTurns: thread.queuedTurns.filter(
+              (entry) => entry.messageId !== payload.messageId,
+            ),
             updatedAt: event.occurredAt,
           }),
         };

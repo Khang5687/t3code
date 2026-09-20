@@ -668,6 +668,35 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
+/**
+ * A message waiting for the running turn to end, then starting a turn of its
+ * own. It carries the whole turn-start input so the server can drain it with
+ * nothing from the client: the composer's model and interaction mode are
+ * snapshotted here at queue time and later composer changes do not reach it.
+ * `messageId` is the entry's identity — the drain sends this exact message.
+ *
+ * `held` means the row stopped draining on its own because the turn was
+ * stopped, failed, or the session died. It only leaves on Send now.
+ */
+export const OrchestrationQueuedTurn = Schema.Struct({
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  context: Schema.optional(OrchestrationMessageContext),
+  modelSelection: Schema.optional(ModelSelection),
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  held: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  createdAt: IsoDateTime,
+});
+export type OrchestrationQueuedTurn = typeof OrchestrationQueuedTurn.Type;
+
+/** Session statuses that stop a queue from draining on its own. */
+export function sessionStatusHoldsQueuedTurns(status: OrchestrationSession["status"]): boolean {
+  return status === "error" || status === "interrupted" || status === "stopped";
+}
+
 // Version changes even when a manual rename keeps the same text.
 export const ThreadTitleState = Schema.Struct({
   source: Schema.Literals(["manual", "generated"]),
@@ -827,6 +856,11 @@ export const OrchestrationThread = Schema.Struct({
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
+  // Oldest first; the head drains when the running turn completes. Optional so
+  // payloads from pre-queue servers still decode.
+  queuedTurns: Schema.Array(OrchestrationQueuedTurn).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   session: Schema.NullOr(OrchestrationSession),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
@@ -1324,6 +1358,60 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Holds a message until the running turn ends, then starts a turn for it. The
+ * fields the turn will run with are captured here, not read from the composer
+ * at drain time. Attachments are normalized exactly like `thread.turn.start`,
+ * so an enqueued message owns its uploads from the moment it is queued.
+ */
+export const ThreadTurnQueueCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(ChatAttachment),
+    context: Schema.optional(OrchestrationMessageContext),
+  }),
+  modelSelection: Schema.optional(ModelSelection),
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const ClientThreadTurnQueueCommand = Schema.Struct({
+  ...ThreadTurnQueueCommand.fields,
+  message: Schema.Struct({
+    ...ThreadTurnQueueCommand.fields.message.fields,
+    attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
+  }),
+});
+
+/** Takes a row out of the queue. The client puts its text back in the composer. */
+const ThreadTurnQueueRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Sends a queued row now instead of waiting. While a turn runs this steers it;
+ * on a held or idle thread it starts a new turn. One command either way, so the
+ * client never races a remove against a send.
+ */
+const ThreadTurnQueueSendCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue.send"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
@@ -1412,6 +1500,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
+  ThreadTurnQueueCommand,
+  ThreadTurnQueueRemoveCommand,
+  ThreadTurnQueueSendCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1445,6 +1536,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
+  ClientThreadTurnQueueCommand,
+  ThreadTurnQueueRemoveCommand,
+  ThreadTurnQueueSendCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1674,6 +1768,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.interaction-mode-set",
   "thread.message-sent",
   "thread.turn-start-requested",
+  "thread.turn-queued",
+  "thread.turn-queue-removed",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
@@ -1891,6 +1987,17 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadTurnQueuedPayload = Schema.Struct({
+  threadId: ThreadId,
+  queuedTurn: OrchestrationQueuedTurn,
+});
+
+export const ThreadTurnQueueRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  removedAt: IsoDateTime,
+});
+
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
@@ -2106,6 +2213,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-requested"),
     payload: ThreadTurnStartRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-queued"),
+    payload: ThreadTurnQueuedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-queue-removed"),
+    payload: ThreadTurnQueueRemovedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

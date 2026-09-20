@@ -2687,7 +2687,7 @@ export function GeneralSettingsPanel() {
         <SettingsRow
           {...searchableSetting("follow-up-behavior")}
           description={
-            "Queue follow-ups while the agent runs or steer the current run. " +
+            "Queue a follow-up to start its own turn once this one ends, or steer the running turn now. " +
             (settings.sendShortcut === "mod-enter-multiline"
               ? `Press ${modifierLabel} + Enter for single-line prompts or ${modifierLabel} + Shift + Enter for multiline prompts to do the opposite for one message.`
               : `Press ${modifierLabel}${settings.sendShortcut === "mod-enter" ? " + Shift" : ""} + Enter to do the opposite for one message.`)

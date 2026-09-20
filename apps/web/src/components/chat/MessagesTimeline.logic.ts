@@ -30,10 +30,11 @@ import {
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
-import type { QueuedComposerMessage } from "../../queuedMessageStore";
+
 import {
   type MessageId,
   type OrchestrationLatestTurn,
+  type OrchestrationQueuedTurn,
   type TurnId,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
@@ -436,9 +437,11 @@ export type MessagesTimelineRow =
       kind: "queued-message";
       id: string;
       createdAt: string;
-      queuedMessage: QueuedComposerMessage;
-      /** Oldest queued message, the one the next boundary sends. */
+      queuedTurn: OrchestrationQueuedTurn;
+      /** Oldest queued row: the one the turn's end sends. */
       isNext: boolean;
+      /** A turn is running, so sending this row now steers it instead of starting one. */
+      isSteer: boolean;
     };
 
 export interface StableMessagesTimelineRowsState {
@@ -953,7 +956,8 @@ export function deriveMessagesTimelineRows(input: {
   /** Live bootstrap progress. Renders a stage card under the first user message. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
   /** Messages sent during the running turn, rendered after the live rows. */
-  queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
+  queuedTurns?: ReadonlyArray<OrchestrationQueuedTurn>;
+  queuedTurnsAreSteers?: boolean;
 }): MessagesTimelineRow[] {
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
@@ -1453,13 +1457,14 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
   const rows = attachTrailingToolGroupsToAssistant(nextRows);
-  input.queuedMessages?.forEach((queuedMessage, index) => {
+  input.queuedTurns?.forEach((queuedTurn, index) => {
     rows.push({
       kind: "queued-message",
-      id: `queued-message:${queuedMessage.id}`,
-      createdAt: queuedMessage.createdAt,
-      queuedMessage,
+      id: `queued-message:${queuedTurn.messageId}`,
+      createdAt: queuedTurn.createdAt,
+      queuedTurn,
       isNext: index === 0,
+      isSteer: input.queuedTurnsAreSteers === true,
     });
   });
   return rows;
@@ -1619,7 +1624,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "queued-message": {
       const bq = b as typeof a;
-      return a.queuedMessage === bq.queuedMessage && a.isNext === bq.isNext;
+      return a.queuedTurn === bq.queuedTurn && a.isNext === bq.isNext && a.isSteer === bq.isSteer;
     }
 
     case "work": {

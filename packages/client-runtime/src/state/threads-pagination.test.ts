@@ -110,6 +110,7 @@ const BASE_THREAD: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [checkpoint("turn-2", 2)],
+  queuedTurns: [],
   session: null,
 };
 

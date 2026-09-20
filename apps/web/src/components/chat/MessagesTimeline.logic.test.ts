@@ -413,6 +413,7 @@ describe("streaming row projection", () => {
       proposedPlans: [],
       activities: [],
       checkpoints: history.map(({ checkpoint }) => checkpoint),
+      queuedTurns: [],
       session: null,
     };
     const state = Atom.make(
@@ -1092,16 +1093,12 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
-  const queuedMessage = (id: string, prompt: string) => ({
-    id,
-    prompt,
-    images: [],
-    files: [],
-    terminalContexts: [],
-    previewAnnotations: [],
-    reviewComments: [],
-    submissionIntent: "foreground" as const,
-    queuedAfterToolActivityId: null,
+  const queuedTurn = (messageId: string, text: string) => ({
+    messageId: MessageId.make(messageId),
+    text,
+    attachments: [],
+    interactionMode: "default" as const,
+    held: false,
     createdAt: "2026-01-01T00:00:01Z",
   });
 
@@ -1112,7 +1109,7 @@ describe("deriveMessagesTimelineRows", () => {
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
       turnDiffSummaries: [],
       supportsConversationRollback: false,
-      queuedMessages: [queuedMessage("q1", "first"), queuedMessage("q2", "second")],
+      queuedTurns: [queuedTurn("q1", "first"), queuedTurn("q2", "second")],
     });
 
     expect(rows.map((row) => row.kind)).toEqual([
@@ -1122,8 +1119,8 @@ describe("deriveMessagesTimelineRows", () => {
       "queued-message",
     ]);
     expect(rows.slice(2)).toMatchObject([
-      { id: "queued-message:q1", isNext: true, queuedMessage: { prompt: "first" } },
-      { id: "queued-message:q2", isNext: false, queuedMessage: { prompt: "second" } },
+      { id: "queued-message:q1", isNext: true, queuedTurn: { text: "first" } },
+      { id: "queued-message:q2", isNext: false, queuedTurn: { text: "second" } },
     ]);
   });
 
@@ -1214,7 +1211,7 @@ describe("deriveMessagesTimelineRows", () => {
       turnDiffSummaries: [],
       supportsConversationRollback: false,
       worktreeSetup: { ...snapshot, phase: "failed" },
-      queuedMessages: [queuedMessage("q1", "later")],
+      queuedTurns: [queuedTurn("q1", "later")],
     });
     expect(withMessages.map((row) => row.kind)).toEqual([
       "message",
@@ -1231,7 +1228,7 @@ describe("deriveMessagesTimelineRows", () => {
       turnDiffSummaries: [],
       supportsConversationRollback: false,
       worktreeSetup: snapshot,
-      queuedMessages: [queuedMessage("q1", "later")],
+      queuedTurns: [queuedTurn("q1", "later")],
     });
     expect(runningWithQueue.map((row) => row.kind)).toEqual([
       "message",

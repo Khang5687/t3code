@@ -164,6 +164,7 @@ const makeProjectedThread = (input: {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    queuedTurns: [],
     session: null,
   };
 };

@@ -97,6 +97,7 @@ const THREAD = {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    queuedTurns: [],
     session: null,
   },
   page: { beforeCursor: null, hasMore: false, snapshotSequence: 2 },

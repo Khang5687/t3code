@@ -21,6 +21,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ThreadId,
+  type OrchestrationQueuedTurn,
   type ProjectScript,
 } from "@t3tools/contracts";
 import {
@@ -107,6 +108,8 @@ interface ThreadInspectorSelection {
 }
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
+
+const EMPTY_QUEUED_TURNS: ReadonlyArray<OrchestrationQueuedTurn> = [];
 
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
@@ -275,6 +278,10 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const removeQueuedThreadTurn = useAtomCommand(
+    threadEnvironment.removeQueuedTurn,
+    "remove queued message",
+  );
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -539,6 +546,19 @@ function ThreadRouteContent(
   const handleOpenConnectionEditor = useCallback(() => {
     void navigation.navigate("Connections");
   }, [navigation]);
+  // Mobile removes a queued row without giving its content back to the
+  // composer: the text is still on the server row until the command lands, and
+  // the attachments were uploaded from whichever client queued it.
+  const handleRemoveQueuedTurn = useCallback(
+    (messageId: MessageId) => {
+      if (!selectedThread) return;
+      void removeQueuedThreadTurn({
+        environmentId: selectedThread.environmentId,
+        input: { threadId: selectedThread.id, messageId },
+      });
+    },
+    [removeQueuedThreadTurn, selectedThread],
+  );
   const handleStopThread = useCallback(() => {
     if (
       !selectedThread ||
@@ -1040,6 +1060,8 @@ function ThreadRouteContent(
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
           queuedMessages={composer.selectedThreadQueuedMessages}
           dispatchingMessageId={composer.dispatchingQueuedMessageId}
+          queuedTurns={selectedThreadDetail?.queuedTurns ?? EMPTY_QUEUED_TURNS}
+          onRemoveQueuedTurn={handleRemoveQueuedTurn}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}

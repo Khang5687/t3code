@@ -78,6 +78,7 @@ const THREAD: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  queuedTurns: [],
   session: null,
 };
 const SNAPSHOT: OrchestrationThreadDetailSnapshot = { snapshotSequence: 7, thread: THREAD };

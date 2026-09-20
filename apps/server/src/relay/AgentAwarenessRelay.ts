@@ -79,6 +79,11 @@ export function shouldPublishAgentAwarenessEvent(event: OrchestrationEvent): boo
       // before the real running state arrives. Provider lifecycle events publish
       // the authoritative starting/running state instead.
       return false;
+    case "thread.turn-queued":
+    case "thread.turn-queue-removed":
+      // Queue edits change what happens next, not what the agent is doing now.
+      // The turn these rows start publishes its own running state.
+      return false;
     case "thread.proposed-plan-upserted":
     case "thread.runtime-mode-set":
     case "thread.interaction-mode-set":

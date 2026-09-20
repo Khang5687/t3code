@@ -400,6 +400,7 @@ describe("OrchestrationEngine", () => {
           proposedPlans: [],
           activities: [],
           checkpoints: [],
+          queuedTurns: [],
           session: null,
         },
       ],
@@ -412,6 +413,7 @@ describe("OrchestrationEngine", () => {
         proposedPlans: [],
         activities: [],
         checkpoints: [],
+        queuedTurns: [],
       })),
     };
     let fullSnapshotReadCount = 0;

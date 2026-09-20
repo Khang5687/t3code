@@ -13,6 +13,7 @@ import type {
   EnvironmentId,
   MessageId,
   OrchestrationMessageContext,
+  OrchestrationQueuedTurn,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -171,7 +172,11 @@ import {
   THREAD_DISCLOSURE_TRANSITION_MS,
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
-import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
+import {
+  appendPendingThreadMessages,
+  appendQueuedTurns,
+  type PendingThreadFeedEntry,
+} from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import {
@@ -248,8 +253,10 @@ export interface ThreadFeedProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
+  readonly queuedTurns: ReadonlyArray<OrchestrationQueuedTurn>;
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: (message: QueuedThreadMessage) => void;
+  readonly onRemoveQueuedTurn: (messageId: MessageId) => void;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
@@ -1359,6 +1366,7 @@ function renderFeedEntry(
     | "skills"
     | "dispatchingMessageId"
     | "onEditPendingMessage"
+    | "onRemoveQueuedTurn"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -1637,8 +1645,27 @@ function renderFeedEntry(
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             <Text className="font-t3-medium text-xs tabular-nums text-adaptive-neutral-600-400">
-              {entry.pendingMessage && !entry.acknowledged ? "Pending" : timestampLabel}
+              {entry.queuedTurn
+                ? entry.queuedTurn.held
+                  ? "Held"
+                  : "Queued"
+                : entry.pendingMessage && !entry.acknowledged
+                  ? "Pending"
+                  : timestampLabel}
             </Text>
+            {entry.queuedTurn ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Remove queued message"
+                hitSlop={8}
+                className="size-7 items-center justify-center"
+                onPress={() => {
+                  if (entry.queuedTurn) props.onRemoveQueuedTurn(entry.queuedTurn.messageId);
+                }}
+              >
+                <SymbolView name="xmark" size={14} tintColor={iconSubtleColor} />
+              </Pressable>
+            ) : null}
             {entry.pendingMessage &&
             !entry.acknowledged &&
             !entry.pendingMessage.creation &&
@@ -2450,19 +2477,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   }, [expandedWorkGroups]);
   const presentedFeed = useMemo(
     () =>
-      appendPendingThreadMessages(
-        deriveThreadFeedPresentation(
+      appendQueuedTurns(
+        appendPendingThreadMessages(
+          deriveThreadFeedPresentation(
+            props.feed,
+            props.latestTurn,
+            expandedTurnIds,
+            expandedWorkGroupIds,
+            props.activeWorkStartedAt,
+          ),
           props.feed,
-          props.latestTurn,
-          expandedTurnIds,
-          expandedWorkGroupIds,
-          props.activeWorkStartedAt,
+          props.queuedMessages,
         ),
-        props.feed,
-        props.queuedMessages,
+        props.queuedTurns,
       ),
     [
       props.queuedMessages,
+      props.queuedTurns,
       expandedTurnIds,
       expandedWorkGroupIds,
       props.activeWorkStartedAt,
@@ -2754,6 +2785,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             environmentId: props.environmentId,
             dispatchingMessageId: props.dispatchingMessageId,
             onEditPendingMessage: props.onEditPendingMessage,
+            onRemoveQueuedTurn: props.onRemoveQueuedTurn,
             copiedRowId,
             expandedWorkRows,
             expandedReasoningMessageIds,
@@ -2799,6 +2831,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       setupAnchorIndex,
       props.dispatchingMessageId,
       props.onEditPendingMessage,
+      props.onRemoveQueuedTurn,
       copiedRowId,
       disclosureToggleSettling,
       expandedWorkRows,

@@ -14,7 +14,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
-import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId, sessionStatusHoldsQueuedTurns } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
 export type ThreadDetailReducerResult =
@@ -139,6 +139,7 @@ export function applyThreadDetailEvent(
           proposedPlans: [],
           activities: [],
           checkpoints: [],
+          queuedTurns: [],
           session: null,
         },
       };
@@ -351,6 +352,37 @@ export function applyThreadDetailEvent(
         },
       };
 
+    case "thread.turn-queued":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedTurns: [
+            ...thread.queuedTurns.filter(
+              (entry) => entry.messageId !== event.payload.queuedTurn.messageId,
+            ),
+            event.payload.queuedTurn,
+          ],
+          updatedAt: event.occurredAt,
+        },
+      };
+
+    case "thread.turn-queue-removed": {
+      if (!thread.queuedTurns.some((entry) => entry.messageId === event.payload.messageId)) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedTurns: thread.queuedTurns.filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     case "thread.turn-interrupt-requested": {
       if (event.payload.turnId === undefined) {
         return { kind: "unchanged" };
@@ -514,12 +546,19 @@ export function applyThreadDetailEvent(
             : thread.latestTurn,
       );
 
+      // A stopped, failed, or dead session holds the queue: the rows stay put
+      // and wait for Send now rather than firing into a broken session.
+      const queuedTurns = sessionStatusHoldsQueuedTurns(event.payload.session.status)
+        ? thread.queuedTurns.map((entry) => (entry.held ? entry : { ...entry, held: true }))
+        : thread.queuedTurns;
+
       return {
         kind: "updated",
         thread: {
           ...thread,
           session: event.payload.session,
           latestTurn,
+          queuedTurns,
           updatedAt: event.occurredAt,
         },
       };

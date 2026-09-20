@@ -18,6 +18,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationQueuedTurn,
   OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -146,7 +147,10 @@ export interface ThreadDetailScreenProps {
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
+  /** The server's turn queue for this thread: messages waiting for the running turn to end. */
+  readonly queuedTurns: ReadonlyArray<OrchestrationQueuedTurn>;
   readonly dispatchingMessageId: MessageId | null;
+  readonly onRemoveQueuedTurn: (messageId: MessageId) => void;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -881,8 +885,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             worktreeSetup={props.worktreeSetup}
             setupWorkingStartedAt={props.setupWorkingStartedAt}
             queuedMessages={props.queuedMessages}
+            queuedTurns={props.queuedTurns}
             dispatchingMessageId={props.dispatchingMessageId}
             onEditPendingMessage={handleEditPendingMessage}
+            onRemoveQueuedTurn={props.onRemoveQueuedTurn}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}

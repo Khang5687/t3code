@@ -50,6 +50,7 @@ function makeReadModel(checkpoints: ReadonlyArray<OrchestrationCheckpointSummary
         proposedPlans: [],
         activities: [],
         checkpoints,
+        queuedTurns: [],
         session: null,
       },
     ],

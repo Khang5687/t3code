@@ -49,6 +49,9 @@ export type UnlinkThreadPullRequestInput = CommandInput<"thread.pull-request.unl
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type QueueThreadTurnInput = CommandInput<"thread.turn.queue">;
+export type RemoveQueuedThreadTurnInput = CommandInput<"thread.turn.queue.remove">;
+export type SendQueuedThreadTurnInput = CommandInput<"thread.turn.queue.send">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -304,6 +307,41 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
   return yield* dispatch({
     ...input,
     type: "thread.turn.start",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const queueThreadTurn: (input: QueueThreadTurnInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.queueThreadTurn",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.turn.queue",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const removeQueuedThreadTurn: (input: RemoveQueuedThreadTurnInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.removeQueuedThreadTurn")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.turn.queue.remove",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const sendQueuedThreadTurn: (input: SendQueuedThreadTurnInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.sendQueuedThreadTurn",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.turn.queue.send",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

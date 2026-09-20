@@ -1,6 +1,8 @@
 import {
   ApprovalRequestId,
   isImportedAgentSessionMessageId,
+  NonNegativeInt,
+  sessionStatusHoldsQueuedTurns,
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
   type OrchestrationEvent,
@@ -36,6 +38,7 @@ import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadQueuedTurnRepository } from "../../persistence/Services/ProjectionThreadQueuedTurns.ts";
 import * as ProjectionThreadPullRequests from "../../persistence/ProjectionThreadPullRequests.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
@@ -49,6 +52,7 @@ import { ProjectionStateRepositoryLive } from "../../persistence/Layers/Projecti
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadQueuedTurnRepositoryLive } from "../../persistence/Layers/ProjectionThreadQueuedTurns.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
@@ -485,6 +489,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
+    const projectionThreadQueuedTurnRepository = yield* ProjectionThreadQueuedTurnRepository;
     const projectionThreadPullRequestRepository =
       yield* ProjectionThreadPullRequests.ProjectionThreadPullRequestRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
@@ -1367,6 +1372,32 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionTurnRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
+          yield* projectionThreadQueuedTurnRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+
+        case "thread.deleted":
+          yield* projectionThreadQueuedTurnRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+
+        case "thread.turn-queued":
+          // The event sequence is the queue position: monotonic, and a removal
+          // never has to renumber the rows behind it.
+          yield* projectionThreadQueuedTurnRepository.upsert({
+            ...event.payload.queuedTurn,
+            threadId: event.payload.threadId,
+            position: NonNegativeInt.make(event.sequence),
+          });
+          return;
+
+        case "thread.turn-queue-removed":
+          yield* projectionThreadQueuedTurnRepository.remove({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
           return;
 
         case "thread.turn-start-requested": {
@@ -1427,6 +1458,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.session-set": {
+          // A stopped, failed, or dead session must never let the queue fire
+          // into a broken state. The rows stay and wait for Send now.
+          if (sessionStatusHoldsQueuedTurns(event.payload.session.status)) {
+            yield* projectionThreadQueuedTurnRepository.setHeldByThreadId({
+              threadId: event.payload.threadId,
+              held: true,
+            });
+          }
           const turnId = event.payload.session.activeTurnId;
           if (turnId === null || event.payload.session.status !== "running") {
             if (
@@ -2198,6 +2237,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
+  Layer.provideMerge(ProjectionThreadQueuedTurnRepositoryLive),
   Layer.provideMerge(ProjectionThreadPullRequests.layer),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),

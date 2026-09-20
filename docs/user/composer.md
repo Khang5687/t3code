@@ -31,20 +31,33 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, a message sent during a running turn waits at the end of the conversation as a
-dashed bubble. It goes out on its own when the agent finishes its next tool
-call, or when the turn ends. Use the arrow under the bubble to send it right
-away, or the X to move it back into the composer. Stop returns every queued
-message to the composer.
+A message sent during a running turn waits at the end of the conversation as a
+dashed bubble. It starts a turn of its own once the running turn finishes, and
+several queued messages run one after another, one turn each. The queue lives on
+the server, so it keeps draining after you reload the page, switch threads, or
+close the tab, and every client connected to that thread shows the same rows.
+
+Use the arrow under a bubble to send it now: while a turn runs that steers the
+turn, otherwise it starts the turn straight away. The X takes the message out of
+the queue and puts its text back in the composer, along with its attachments
+when you queued it from that client.
+
+Stop, a failed turn, and a pending approval or question all hold the queue.
+Held rows stay where they are and go out only when you press the arrow, so a
+queue never fires into a session that needs your attention first.
 
 In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
-behavior or **Steer** to send new messages immediately. This setting applies to
-the current client. Messages already queued keep their place.
+behavior or **Steer** to send new messages into the running turn immediately.
+This setting applies to the current client. Messages already queued keep their
+place.
 
 Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
 the oldest queued message now. Change `thread.steerQueuedMessage` in
 **Settings → Keybindings** to use another shortcut. It leaves the current draft
 in the composer and waits if the agent needs an approval or an answer.
+
+On mobile the queued rows are visible and removable; sending one early is web
+and desktop only.
 
 ## Queue messages offline on mobile
 

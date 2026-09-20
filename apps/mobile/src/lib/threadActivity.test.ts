@@ -283,6 +283,7 @@ function makeThread(
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    queuedTurns: [],
     session: null,
     ...input,
     settledOverride: input.settledOverride ?? null,

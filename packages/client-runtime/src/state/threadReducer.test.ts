@@ -44,6 +44,7 @@ const baseThread: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  queuedTurns: [],
   session: null,
 };
 

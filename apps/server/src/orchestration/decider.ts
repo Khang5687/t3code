@@ -13,6 +13,7 @@ import {
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
+  type OrchestrationQueuedTurn,
 } from "@t3tools/contracts";
 import {
   legacyLinkedPullRequestOf,
@@ -130,6 +131,85 @@ function hasQueuedTurnStartForThread(
     now,
   );
 }
+
+/** A turn the queue must wait behind: running, or on its way to running. */
+function threadTurnInFlight(thread: Pick<OrchestrationThread, "latestTurn" | "session">): boolean {
+  return (
+    thread.latestTurn?.state === "running" ||
+    thread.session?.status === "running" ||
+    thread.session?.status === "starting"
+  );
+}
+
+/**
+ * The events that send one queued entry: its message is persisted and its turn
+ * is requested, and the row leaves the queue when it was in it. The same shape
+ * serves the drain at turn end, an explicit Send now, and a queue command that
+ * landed on an idle thread.
+ *
+ * The entry's own model selection and interaction mode win — they were captured
+ * when the user pressed Enter. Runtime mode is the thread's current one, so a
+ * queued message can never run under a permission policy the user has changed.
+ */
+const sendQueuedTurnEvents = Effect.fn("sendQueuedTurnEvents")(function* (input: {
+  readonly command: Pick<OrchestrationCommand, "commandId">;
+  readonly thread: Pick<OrchestrationThread, "id" | "runtimeMode">;
+  readonly queuedTurn: OrchestrationQueuedTurn;
+  readonly occurredAt: string;
+  readonly alreadyQueued: boolean;
+}) {
+  const base = {
+    aggregateKind: "thread",
+    aggregateId: input.thread.id,
+    occurredAt: input.occurredAt,
+    commandId: input.command.commandId,
+  } as const;
+  const removedEvents: Array<Omit<OrchestrationEvent, "sequence">> = input.alreadyQueued
+    ? [
+        {
+          ...(yield* withEventBase(base)),
+          type: "thread.turn-queue-removed",
+          payload: {
+            threadId: input.thread.id,
+            messageId: input.queuedTurn.messageId,
+            removedAt: input.occurredAt,
+          },
+        },
+      ]
+    : [];
+  const messageEvent: Omit<OrchestrationEvent, "sequence"> = {
+    ...(yield* withEventBase(base)),
+    type: "thread.message-sent",
+    payload: {
+      threadId: input.thread.id,
+      messageId: input.queuedTurn.messageId,
+      role: "user",
+      text: input.queuedTurn.text,
+      attachments: input.queuedTurn.attachments,
+      ...(input.queuedTurn.context !== undefined ? { context: input.queuedTurn.context } : {}),
+      turnId: null,
+      streaming: false,
+      createdAt: input.occurredAt,
+      updatedAt: input.occurredAt,
+    },
+  };
+  const turnStartEvent: Omit<OrchestrationEvent, "sequence"> = {
+    ...(yield* withEventBase(base)),
+    causationEventId: messageEvent.eventId,
+    type: "thread.turn-start-requested",
+    payload: {
+      threadId: input.thread.id,
+      messageId: input.queuedTurn.messageId,
+      ...(input.queuedTurn.modelSelection !== undefined
+        ? { modelSelection: input.queuedTurn.modelSelection }
+        : {}),
+      runtimeMode: input.thread.runtimeMode,
+      interactionMode: input.queuedTurn.interactionMode,
+      createdAt: input.occurredAt,
+    },
+  };
+  return [...removedEvents, messageEvent, turnStartEvent];
+});
 
 function findPullRequestLink(
   thread: Pick<OrchestrationThread, "pullRequests">,
@@ -1543,6 +1623,111 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.queue": {
+      if (isImportedAgentSessionMessageId(command.message.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message id '${command.message.messageId}' uses the reserved imported-session namespace.`,
+        });
+      }
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        thread.messages.some((message) => message.id === command.message.messageId) ||
+        thread.queuedTurns.some((entry) => entry.messageId === command.message.messageId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.message.messageId}' already exists on thread '${command.threadId}'.`,
+        });
+      }
+      const queuedTurn = {
+        messageId: command.message.messageId,
+        text: command.message.text,
+        attachments: command.message.attachments,
+        ...(command.message.context !== undefined ? { context: command.message.context } : {}),
+        ...(command.modelSelection !== undefined ? { modelSelection: command.modelSelection } : {}),
+        interactionMode: command.interactionMode,
+        held: false,
+        createdAt: command.createdAt,
+      };
+      // Nothing to wait behind: queueing on an idle thread is an ordinary send.
+      // Deciding that here rather than in the client closes the race where the
+      // turn ends between the composer's check and this command arriving.
+      if (!threadTurnInFlight(thread) && thread.queuedTurns.length === 0) {
+        return yield* sendQueuedTurnEvents({
+          command,
+          thread,
+          queuedTurn,
+          occurredAt: command.createdAt,
+          alreadyQueued: false,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-queued",
+        payload: { threadId: command.threadId, queuedTurn },
+      };
+    }
+
+    case "thread.turn.queue.remove": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (!thread.queuedTurns.some((entry) => entry.messageId === command.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.messageId}' is not queued on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-queue-removed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          removedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.turn.queue.send": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedTurn = thread.queuedTurns.find((entry) => entry.messageId === command.messageId);
+      if (!queuedTurn) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.messageId}' is not queued on thread '${command.threadId}'.`,
+        });
+      }
+      return yield* sendQueuedTurnEvents({
+        command,
+        thread,
+        queuedTurn,
+        occurredAt: command.createdAt,
+        alreadyQueued: true,
+      });
+    }
+
     case "thread.turn.interrupt": {
       yield* requireThread({
         readModel,
@@ -1891,9 +2076,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // as snoozed, without spending the return ticket.
       const isSessionActivity =
         command.session.status === "starting" || command.session.status === "running";
+      // The turn just ended cleanly: send the head of the queue. This is the
+      // whole drain — one queued message becomes one new turn, and the next one
+      // waits for this turn's own session.set. A stopped or failed turn leaves
+      // the queue held, and an open approval or question means an answer is
+      // owed first, so neither drains here.
+      const drainEvents: Array<Omit<OrchestrationEvent, "sequence">> =
+        (command.session.status === "idle" || command.session.status === "ready") &&
+        thread.latestTurn?.state === "running" &&
+        thread.queuedTurns[0] !== undefined &&
+        !thread.queuedTurns[0].held &&
+        openRequests(thread).size === 0
+          ? [
+              ...(yield* sendQueuedTurnEvents({
+                command,
+                thread,
+                queuedTurn: thread.queuedTurns[0],
+                occurredAt: command.createdAt,
+                alreadyQueued: true,
+              })),
+            ]
+          : [];
       // Real activity resets ANY override (settled wakes, active unpins).
       if (thread.settledOverride === null || !isSessionActivity) {
-        return sessionSetEvent;
+        return [sessionSetEvent, ...drainEvents];
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
@@ -1909,7 +2115,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      return [unsettledEvent, sessionSetEvent];
+      return [unsettledEvent, sessionSetEvent, ...drainEvents];
     }
 
     case "thread.message.assistant.delta":
