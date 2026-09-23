@@ -3,7 +3,9 @@
 ## v0.0.42-fork.3
 
 Built on upstream `v0.0.42`. Adds five features on top of `v0.0.42-fork.2`;
-everything in that release is still here.
+everything in that release is still here. The five land as one squashed
+`[fork]` commit (they were built in parallel and integrated by merge — see
+[ADR 0001](../adr/0001-fork-main-feature-commit-stack.md), Amendment 1).
 
 ### Features
 
