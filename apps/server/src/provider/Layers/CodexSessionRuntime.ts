@@ -178,6 +178,8 @@ export interface CodexSessionRuntimeOptions {
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
+  /** Open a `thread/fork` copy of `resumeCursor` instead of resuming it. */
+  readonly forkResumeCursor?: boolean;
   readonly appServerArgs?: ReadonlyArray<string>;
   /** Capabilities the session's `t3-code` MCP credential grants; drives the prompt blocks. */
   readonly mcpCapabilities?: ReadonlySet<string>;
@@ -547,8 +549,10 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
-}): EffectCodexSchema.V2ThreadStartParams {
+}) {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
+  // Inferred, not annotated: `thread/resume` and `thread/fork` take the same
+  // fields, and the narrow shape fits all three requests.
   return {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
@@ -556,7 +560,7 @@ function buildThreadStartParams(input: {
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
-  };
+  } satisfies EffectCodexSchema.V2ThreadStartParams;
 }
 
 function runtimeModeToTurnSandboxPolicy(
@@ -705,8 +709,8 @@ const decodeCodexThreadResumeMetadata = Schema.decodeUnknownEffect(CodexThreadRe
 interface CodexThreadOpenClient {
   readonly raw: {
     readonly request: (
-      method: "thread/resume",
-      payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"] & {
+      method: "thread/resume" | "thread/fork",
+      payload: CodexRpc.ClientRequestParamsByMethod["thread/resume" | "thread/fork"] & {
         readonly excludeTurns?: boolean;
       },
     ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
@@ -728,6 +732,13 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  /**
+   * Copy `resumeThreadId` into a new native thread with `thread/fork` rather
+   * than resuming it, so later rewinds cannot touch the source. A failure is
+   * returned as is: falling back to a fresh thread would hide a missing source
+   * behind an empty conversation.
+   */
+  readonly forkResumeThread?: boolean;
 }): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -739,6 +750,24 @@ export const openCodexThread = (input: {
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
+  }
+
+  if (input.forkResumeThread === true) {
+    return input.client.raw
+      .request("thread/fork", { threadId: resumeThreadId, ...startParams, excludeTurns: true })
+      .pipe(
+        Effect.flatMap((response) =>
+          decodeCodexThreadResumeMetadata(response).pipe(
+            Effect.mapError((error) =>
+              CodexErrors.CodexAppServerRequestError.invalidPayload(
+                "thread/fork",
+                "decode-payload",
+                error,
+              ),
+            ),
+          ),
+        ),
+      );
   }
 
   // Older providers may still return history despite excludeTurns. Only the
@@ -1374,7 +1403,11 @@ export const makeCodexSessionRuntime = (
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
       threadId: options.threadId,
-      ...(options.resumeCursor !== undefined ? { resumeCursor: options.resumeCursor } : {}),
+      // A fork's cursor names the source thread; it only becomes this
+      // session's own once `thread/fork` returns the copy's id.
+      ...(options.resumeCursor !== undefined && options.forkResumeCursor !== true
+        ? { resumeCursor: options.resumeCursor }
+        : {}),
       createdAt: sessionCreatedAt,
       updatedAt: sessionCreatedAt,
     } satisfies ProviderSession;
@@ -2381,6 +2414,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        ...(options.forkResumeCursor === true ? { forkResumeThread: true } : {}),
       });
 
       const providerThreadId = opened.thread.id;

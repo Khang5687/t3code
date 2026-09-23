@@ -198,6 +198,8 @@ describe("ProviderCommandReactor", () => {
     readonly deferReactorStart?: boolean;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
+    /** Defaults to true, as Codex, Claude and OpenCode report it. */
+    readonly supportsForkResume?: boolean;
     readonly requiresNewThreadForModelChange?: boolean;
     readonly unreadableHistory?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
@@ -212,6 +214,10 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+    readonly assertRollbackSupportedEffect?: () => Effect.Effect<void, ProviderServiceError>;
+    /** Resume handles the session directory has persisted, keyed by thread id. */
+    readonly persistedResumeCursors?: Readonly<Record<string, unknown>>;
+    readonly rollbackConversationEffect?: () => Effect.Effect<void, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
     readonly routeClaudeThroughPxpipe?: boolean;
     readonly pxpipeSidecarStatus?: PxpipeSidecarState["status"];
@@ -323,6 +329,15 @@ describe("ProviderCommandReactor", () => {
         ),
       ),
     );
+    const assertConversationRollbackSupported = vi.fn<
+      ProviderServiceShape["assertConversationRollbackSupported"]
+    >(() => input?.assertRollbackSupportedEffect?.() ?? Effect.void);
+    const getPersistedResumeCursor = vi.fn<ProviderServiceShape["getPersistedResumeCursor"]>(
+      (threadId) => Effect.succeed(input?.persistedResumeCursors?.[threadId]),
+    );
+    const rollbackConversation = vi.fn<ProviderServiceShape["rollbackConversation"]>(
+      () => input?.rollbackConversationEffect?.() ?? Effect.void,
+    );
     const renameBranch = vi.fn((input: unknown) =>
       Effect.succeed({
         branch:
@@ -395,8 +410,10 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          supportsForkResume: input?.supportsForkResume ?? true,
         }),
-      assertConversationRollbackSupported: () => unsupported(),
+      assertConversationRollbackSupported,
+      getPersistedResumeCursor,
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
         const driverKind = ProviderDriverKind.make(
@@ -422,7 +439,7 @@ describe("ProviderCommandReactor", () => {
           },
         });
       },
-      rollbackConversation: () => unsupported(),
+      rollbackConversation,
       uploadFeedback: () => unsupported(),
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);
@@ -646,6 +663,9 @@ describe("ProviderCommandReactor", () => {
           }),
         ),
       tryHandlePromptCommand,
+      assertConversationRollbackSupported,
+      getPersistedResumeCursor,
+      rollbackConversation,
       startSession,
       sendTurn,
       compactThread,
@@ -4531,6 +4551,375 @@ describe("ProviderCommandReactor", () => {
           instanceRoutesThroughPxpipe(settings, ProviderInstanceId.make(instanceId), inherited),
         ),
       ).toEqual([false, false]);
+    });
+  });
+
+  describe("lazy fork session", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    const sourceThreadId = ThreadId.make("thread-1");
+    const forkThreadId = ThreadId.make("thread-fork");
+    const sourceCursor = { opaque: "source-resume-cursor" };
+
+    /**
+     * A source with two earlier messages and a third that started a turn and a
+     * session of its own. Forking at the third copies two, so the source is one
+     * turn past the boundary and owns a session the fork must not touch.
+     */
+    const forkSourceThread = async (harness: Awaited<ReturnType<typeof createHarness>>) => {
+      for (const index of [1, 2]) {
+        await harness.runEffect(
+          harness.engine.dispatch({
+            type: "thread.message.user.append",
+            commandId: CommandId.make(`cmd-source-message-${index}`),
+            threadId: sourceThreadId,
+            message: {
+              messageId: asMessageId(`source-message-${index}`),
+              text: `source message ${index}`,
+              attachments: [],
+            },
+            createdAt: now,
+          }),
+        );
+      }
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-source-message-3"),
+          threadId: sourceThreadId,
+          message: {
+            messageId: asMessageId("source-message-3"),
+            role: "user",
+            text: "source message 3",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.fork",
+          location: "same-workspace",
+          commandId: CommandId.make("cmd-fork"),
+          sourceThreadId,
+          threadId: forkThreadId,
+          messageId: asMessageId("source-message-3"),
+          createdAt: now,
+        }),
+      );
+    };
+
+    const sendInFork = (harness: Awaited<ReturnType<typeof createHarness>>, attempt: string) =>
+      harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-fork-turn-${attempt}`),
+          threadId: forkThreadId,
+          message: {
+            messageId: asMessageId(`fork-message-${attempt}`),
+            role: "user",
+            text: `fork send ${attempt}`,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+    const readFork = async (harness: Awaited<ReturnType<typeof createHarness>>) =>
+      (await harness.readModel()).threads.find((entry) => entry.id === forkThreadId);
+
+    const sessionStartsFor = (
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      threadId: ThreadId,
+    ) =>
+      harness.startSession.mock.calls
+        .filter((call) => call[0] === threadId)
+        .map((call) => call[1] as { readonly resumeCursor?: unknown });
+
+    const turnsSentTo = (harness: Awaited<ReturnType<typeof createHarness>>, threadId: ThreadId) =>
+      harness.sendTurn.mock.calls
+        .map((call) => call[0] as { readonly threadId: ThreadId; readonly input?: string })
+        .filter((request) => request.threadId === threadId);
+
+    it("resumes the source session into the fork and leaves the source alone", async () => {
+      const harness = await createHarness({
+        persistedResumeCursors: { [sourceThreadId]: sourceCursor },
+      });
+      await forkSourceThread(harness);
+      const sourceSessionBefore = harness.runtimeSessions.find(
+        (session) => session.threadId === sourceThreadId,
+      );
+
+      await sendInFork(harness, "1");
+      await waitFor(() => turnsSentTo(harness, forkThreadId).length === 1);
+      await harness.drain();
+
+      expect(harness.assertConversationRollbackSupported).toHaveBeenCalledWith(sourceThreadId);
+      expect(sessionStartsFor(harness, forkThreadId)).toEqual([
+        expect.objectContaining({
+          threadId: forkThreadId,
+          resumeCursor: sourceCursor,
+          forkResumeCursor: true,
+        }),
+      ]);
+      // One user message past the boundary, so one turn to undo, and it is
+      // undone on the fork's session id.
+      expect(harness.rollbackConversation.mock.calls.map((call) => call[0])).toEqual([
+        { threadId: forkThreadId, numTurns: 1 },
+      ]);
+
+      const fork = await readFork(harness);
+      expect(fork?.forkedFrom).toEqual({
+        threadId: sourceThreadId,
+        turnCount: 2,
+        title: "Thread",
+      });
+      expect(fork?.activities ?? []).not.toContainEqual(
+        expect.objectContaining({ kind: "fork.resume.failed" }),
+      );
+
+      // The source keeps the one session it started for itself. Nothing the
+      // fork did was routed to the source's thread id, and its persisted
+      // resume handle still reads the same.
+      expect(sessionStartsFor(harness, sourceThreadId)).toHaveLength(1);
+      expect(turnsSentTo(harness, sourceThreadId)).toHaveLength(1);
+      expect(harness.rollbackConversation.mock.calls).not.toContainEqual([
+        expect.objectContaining({ threadId: sourceThreadId }),
+      ]);
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(
+        harness.runtimeSessions.find((session) => session.threadId === sourceThreadId),
+      ).toEqual(sourceSessionBefore);
+      expect(await harness.runEffect(harness.getPersistedResumeCursor(sourceThreadId))).toEqual(
+        sourceCursor,
+      );
+    });
+
+    /** The fork owes nothing to the source: same session, same cursor, no calls. */
+    const expectSourceUntouched = async (
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      sourceSessionBefore: ProviderSession | undefined,
+    ) => {
+      expect(sessionStartsFor(harness, sourceThreadId)).toHaveLength(1);
+      expect(harness.rollbackConversation.mock.calls).not.toContainEqual([
+        expect.objectContaining({ threadId: sourceThreadId }),
+      ]);
+      expect(harness.stopSession.mock.calls).not.toContainEqual([
+        expect.objectContaining({ threadId: sourceThreadId }),
+      ]);
+      expect(
+        harness.runtimeSessions.find((session) => session.threadId === sourceThreadId),
+      ).toEqual(sourceSessionBefore);
+      expect(await harness.runEffect(harness.getPersistedResumeCursor(sourceThreadId))).toEqual(
+        sourceCursor,
+      );
+    };
+
+    const expectSeedingBanner = async (harness: Awaited<ReturnType<typeof createHarness>>) => {
+      const fork = await readFork(harness);
+      expect(fork?.forkedFrom?.sessionResolution).toBe("seedFromHistory");
+      expect(fork?.activities).toContainEqual(
+        expect.objectContaining({ kind: "fork.resume.failed", tone: "error" }),
+      );
+      expect(turnsSentTo(harness, forkThreadId)).toHaveLength(0);
+      return fork?.activities.find((activity) => activity.kind === "fork.resume.failed")
+        ?.payload as { readonly detail?: string } | undefined;
+    };
+
+    it("seeds instead of resuming when the provider cannot fork a session without touching it", async () => {
+      const harness = await createHarness({
+        supportsForkResume: false,
+        persistedResumeCursors: { [sourceThreadId]: sourceCursor },
+      });
+      await forkSourceThread(harness);
+      const sourceSessionBefore = harness.runtimeSessions.find(
+        (session) => session.threadId === sourceThreadId,
+      );
+
+      await sendInFork(harness, "1");
+      await harness.drain();
+
+      expect(sessionStartsFor(harness, forkThreadId)).toHaveLength(0);
+      expect((await expectSeedingBanner(harness))?.detail).toContain(
+        "cannot resume a session into a fork",
+      );
+      await expectSourceUntouched(harness, sourceSessionBefore);
+    });
+
+    it("seeds when the provider cannot fork the source session, leaving the source alone", async () => {
+      const harness = await createHarness({
+        persistedResumeCursors: { [sourceThreadId]: sourceCursor },
+        startSessionEffect: (session) =>
+          session.threadId === forkThreadId
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "thread/fork",
+                  detail: "no rollout found for thread id source-native-thread",
+                }),
+              )
+            : Effect.succeed(session),
+      });
+      await forkSourceThread(harness);
+      const sourceSessionBefore = harness.runtimeSessions.find(
+        (session) => session.threadId === sourceThreadId,
+      );
+
+      await sendInFork(harness, "1");
+      await harness.drain();
+
+      expect(sessionStartsFor(harness, forkThreadId)).toEqual([
+        expect.objectContaining({ resumeCursor: sourceCursor, forkResumeCursor: true }),
+      ]);
+      expect((await expectSeedingBanner(harness))?.detail).toContain("no rollout found");
+      expect(harness.rollbackConversation).not.toHaveBeenCalled();
+      await expectSourceUntouched(harness, sourceSessionBefore);
+    });
+
+    it("seeds when the fork's first send moves to another provider instance than the source's", async () => {
+      const harness = await createHarness({
+        persistedResumeCursors: { [sourceThreadId]: sourceCursor },
+      });
+      await forkSourceThread(harness);
+      const sourceSessionBefore = harness.runtimeSessions.find(
+        (session) => session.threadId === sourceThreadId,
+      );
+
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-fork-turn-other-instance"),
+          threadId: forkThreadId,
+          message: {
+            messageId: asMessageId("fork-message-other-instance"),
+            role: "user",
+            text: "fork send on another instance",
+            attachments: [],
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex_work"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await harness.drain();
+
+      expect(sessionStartsFor(harness, forkThreadId)).toHaveLength(0);
+      expect((await expectSeedingBanner(harness))?.detail).toContain("codex_work");
+      await expectSourceUntouched(harness, sourceSessionBefore);
+    });
+
+    it("banners the fork and flips to seeding when the source session cannot be resumed", async () => {
+      // No persisted cursor: the source session expired or the provider restarted.
+      const harness = await createHarness();
+      await forkSourceThread(harness);
+
+      await sendInFork(harness, "1");
+      await harness.drain();
+
+      expect(sessionStartsFor(harness, forkThreadId)).toHaveLength(0);
+      expect(turnsSentTo(harness, forkThreadId)).toHaveLength(0);
+
+      const fork = await readFork(harness);
+      expect(fork?.forkedFrom).toEqual({
+        threadId: sourceThreadId,
+        turnCount: 2,
+        title: "Thread",
+        sessionResolution: "seedFromHistory",
+      });
+      expect(fork?.activities).toContainEqual(
+        expect.objectContaining({
+          kind: "fork.resume.failed",
+          tone: "error",
+          summary: "Fork could not resume the original session",
+        }),
+      );
+      expect(
+        fork?.activities.find((activity) => activity.kind === "fork.resume.failed")?.payload,
+      ).toMatchObject({
+        detail: expect.stringContaining("next send starts a fresh session"),
+      });
+    });
+
+    it("seeds a fresh session from the copied history on the send after a failed resume", async () => {
+      const harness = await createHarness();
+      await forkSourceThread(harness);
+
+      await sendInFork(harness, "1");
+      await harness.drain();
+      expect(await readFork(harness).then((fork) => fork?.forkedFrom?.sessionResolution)).toBe(
+        "seedFromHistory",
+      );
+
+      // A runtime-mode change needs a session too, but cannot carry the
+      // transcript into a turn, so it must leave the marker for the send.
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make("cmd-fork-runtime-mode"),
+          threadId: forkThreadId,
+          runtimeMode: "full-access",
+          createdAt: now,
+        }),
+      );
+      await harness.drain();
+      expect(await readFork(harness).then((fork) => fork?.forkedFrom?.sessionResolution)).toBe(
+        "seedFromHistory",
+      );
+
+      await sendInFork(harness, "2");
+      await waitFor(() => turnsSentTo(harness, forkThreadId).length === 1);
+      await harness.drain();
+
+      // Explicitly no resume handle on either start: nothing the failed resume
+      // left behind can resume itself back into the fork.
+      expect(sessionStartsFor(harness, forkThreadId)).toEqual([
+        expect.objectContaining({ threadId: forkThreadId, resumeCursor: null }),
+        expect.objectContaining({ threadId: forkThreadId, resumeCursor: null }),
+      ]);
+      expect(harness.rollbackConversation).not.toHaveBeenCalled();
+
+      const sent = turnsSentTo(harness, forkThreadId)[0];
+      expect(sent?.input).toContain("<forked-conversation>");
+      expect(sent?.input).toContain("source message 1");
+      expect(sent?.input).toContain("source message 2");
+      // The fork's own failed send is not copied history and stays out.
+      expect(sent?.input).not.toContain("fork send 1");
+      expect(sent?.input?.endsWith("fork send 2")).toBe(true);
+
+      const fork = await readFork(harness);
+      expect(fork?.forkedFrom).toEqual({
+        threadId: sourceThreadId,
+        turnCount: 2,
+        title: "Thread",
+      });
+    });
+
+    it("takes the ordinary path on every send after the fork owns a session", async () => {
+      const harness = await createHarness({
+        persistedResumeCursors: { [sourceThreadId]: sourceCursor },
+      });
+      await forkSourceThread(harness);
+
+      await sendInFork(harness, "1");
+      await waitFor(() => turnsSentTo(harness, forkThreadId).length === 1);
+      await harness.drain();
+
+      await sendInFork(harness, "2");
+      await waitFor(() => turnsSentTo(harness, forkThreadId).length === 2);
+      await harness.drain();
+
+      expect(sessionStartsFor(harness, forkThreadId)).toHaveLength(1);
+      expect(harness.rollbackConversation).toHaveBeenCalledTimes(1);
+      expect(turnsSentTo(harness, forkThreadId)[1]?.input).toBe("fork send 2");
     });
   });
 });

@@ -103,7 +103,8 @@ import {
   COMPOSER_TRANSITION_DURATION_MS,
   ThreadComposer,
 } from "./ThreadComposer";
-import { ThreadFeed } from "./ThreadFeed";
+import { ThreadFeed, type ForkedFromLine } from "./ThreadFeed";
+import type { ThreadMessageMenu } from "./thread-message-menu";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
@@ -129,6 +130,8 @@ export interface ThreadDetailScreenProps {
     | { readonly kind: "preparing"; readonly preparingWorktree: boolean }
     | { readonly kind: "failed"; readonly reason: string; readonly onEditTask: () => void }
     | null;
+  /** Holds sends for a reason other than the thread's creation. */
+  readonly sendBlockedReason?: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
@@ -185,6 +188,9 @@ export interface ThreadDetailScreenProps {
   readonly onSubmitUserInput: () => Promise<unknown>;
   readonly onDismissUserInput: () => Promise<unknown>;
   readonly showContent?: boolean;
+  /** Long-press actions for feed rows; absent means the feed offers none. */
+  readonly messageMenu?: ThreadMessageMenu | null;
+  readonly forkedFrom?: ForkedFromLine | null;
 }
 
 function latestStreamingAssistantMessage(
@@ -910,6 +916,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             skills={selectedProviderSkills}
             onUseArtifactTemplate={handleUseArtifactTemplate}
             loadEarlier={props.loadEarlier ?? null}
+            messageMenu={props.messageMenu ?? null}
+            forkedFrom={props.forkedFrom ?? null}
           />
         </View>
       ) : (
@@ -1051,7 +1059,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   // them against a thread id the server may still reject
                   // would strand them in the outbox.
                   sendBlockedReason={
-                    props.creationState?.kind === "preparing" ? "Starting the task…" : null
+                    props.creationState?.kind === "preparing"
+                      ? "Starting the task…"
+                      : (props.sendBlockedReason ?? null)
                   }
                   bottomInset={composerBottomInset}
                   onChangeDraftMessage={props.onChangeDraftMessage}

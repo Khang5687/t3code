@@ -14,11 +14,15 @@ import { useAtomValue } from "@effect/atom-react";
 import type {
   AgentPanelModel,
   AgentPanelWorkflowGroup,
+  DirectSpawnGroup,
+  DirectSpawnSort,
   RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
+  DIRECT_SPAWN_SORTS,
   formatSubagentModelLabel,
   formatSubagentTokenCount,
+  orderDirectSpawns,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
@@ -28,6 +32,14 @@ import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import { useUiStateStore } from "~/uiStateStore";
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -521,6 +533,94 @@ function WorkflowSection({
   );
 }
 
+const DIRECT_SPAWN_GROUP_LABELS: Record<DirectSpawnGroup["key"], string> = {
+  working: "Working",
+  waiting: "Waiting",
+  settled: "Settled",
+};
+
+/** Past this many settled rows the group hides behind its header. */
+const SETTLED_COLLAPSE_LIMIT = 5;
+
+const GROUP_HEADER_CLASS =
+  "px-1.5 pt-1 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground";
+
+const DIRECT_SPAWN_SORT_LABELS: Record<DirectSpawnSort, string> = {
+  status: "Status",
+  "recent-activity": "Recent activity",
+  duration: "Duration",
+  tokens: "Tokens",
+  name: "Name",
+};
+
+const DIRECT_SPAWN_SORT_ITEMS = DIRECT_SPAWN_SORTS.map((value) => ({
+  label: DIRECT_SPAWN_SORT_LABELS[value],
+  value,
+}));
+
+/** Order inside the status groups. The groups themselves never move. */
+function DirectSpawnSortPicker() {
+  const sort = useUiStateStore((state) => state.agentsPanelSort);
+  const setSort = useUiStateStore((state) => state.setAgentsPanelSort);
+  return (
+    <Select
+      items={DIRECT_SPAWN_SORT_ITEMS}
+      value={sort}
+      // base-ui hands back null when a selection is cleared; that is the default.
+      onValueChange={(value) => setSort(value ?? "status")}
+    >
+      <SelectTrigger aria-label="Sort agents" size="xs" variant="ghost" className="w-32">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end" alignItemWithTrigger={false}>
+        {DIRECT_SPAWN_SORT_ITEMS.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            {item.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * One status group of direct spawns. A long Settled group starts collapsed so
+ * finished runs cannot bury the live ones; the decision is taken at mount, so
+ * a group crossing the limit while the user reads it never yanks rows away.
+ */
+function DirectSpawnSection({ group }: { group: DirectSpawnGroup }) {
+  const collapsible = group.key === "settled" && group.count > SETTLED_COLLAPSE_LIMIT;
+  const [expanded, setExpanded] = useState(!collapsible);
+  // A shrinking group loses its toggle, so its rows must come back with it.
+  const open = expanded || !collapsible;
+  const label = `${DIRECT_SPAWN_GROUP_LABELS[group.key]} (${group.count})`;
+  return (
+    <section>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={open}
+          className={cn(
+            GROUP_HEADER_CLASS,
+            "flex w-full items-center gap-1.5 rounded-sm text-left hover:bg-accent/40",
+          )}
+        >
+          {open ? (
+            <ChevronDown aria-hidden className="size-3 shrink-0" />
+          ) : (
+            <ChevronRight aria-hidden className="size-3 shrink-0" />
+          )}
+          <span>{label}</span>
+        </button>
+      ) : (
+        <div className={GROUP_HEADER_CLASS}>{label}</div>
+      )}
+      {open ? group.rows.map((agent) => <AgentRow key={agent.id} agent={agent} />) : null}
+    </section>
+  );
+}
+
 export function AgentsPanel({
   model,
   environmentId = null,
@@ -530,6 +630,8 @@ export function AgentsPanel({
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
 }) {
+  const sort = useUiStateStore((state) => state.agentsPanelSort);
+
   if (!model.hasAgents) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -556,15 +658,15 @@ export function AgentsPanel({
             />
           ))}
           {model.directAgents.length > 0 ? (
-            <section>
-              <div className="px-1.5 pt-1 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground">
-                Direct spawns
-              </div>
-              {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
-              ))}
-            </section>
+            <div className="flex justify-end px-1.5">
+              <DirectSpawnSortPicker />
+            </div>
           ) : null}
+          {orderDirectSpawns(model.directAgents, sort, Date.now())
+            .filter((group) => group.count > 0)
+            .map((group) => (
+              <DirectSpawnSection key={group.key} group={group} />
+            ))}
         </div>
       </ScrollArea>
       <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-[.7rem] text-muted-foreground">

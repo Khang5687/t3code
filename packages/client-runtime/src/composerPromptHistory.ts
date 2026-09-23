@@ -1,5 +1,4 @@
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
-import { PLAN_IMPLEMENTATION_PROMPT_PREFIX } from "../../proposedPlan";
 
 /**
  * Terminal-style prompt recall for the composer. ArrowUp on an empty
@@ -14,6 +13,9 @@ const CLAUDE_ULTRATHINK_PREFIX = "Ultrathink:\n";
 const REVIEW_COMMENT_BLOCK_PATTERN = /<review_comment\b[^>]*>[\s\S]*?<\/review_comment>/g;
 const TRAILING_LEGACY_CONTEXT =
   /\n*<(terminal_context|element_context|preview_annotation)>\n([\s\S]*?)\n<\/\1>\s*$/;
+
+/** Prefix of the message the app sends when the user approves a plan. */
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
 
 /** Text sent in place of an empty prompt when a message is attachments only. */
 export const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
@@ -68,7 +70,7 @@ export interface ComposerPromptHistoryStep {
  */
 function stripTrailingReviewComments(prompt: string): string {
   let cut = prompt.length;
-  for (const match of [...prompt.matchAll(REVIEW_COMMENT_BLOCK_PATTERN)].toReversed()) {
+  for (const match of [...prompt.matchAll(REVIEW_COMMENT_BLOCK_PATTERN)].reverse()) {
     const blockEnd = match.index + match[0].length;
     if (prompt.slice(blockEnd, cut).trim().length > 0) break;
     cut = match.index;
@@ -144,7 +146,7 @@ export function recallableComposerPrompt(messageText: string): string {
   }
 
   // Recall is text-only: never create dangling chips without their backing records.
-  for (const reference of collectComposerContextReferences(prompt).toReversed()) {
+  for (const reference of [...collectComposerContextReferences(prompt)].reverse()) {
     let { start, end } = reference;
     if (prompt[end] === " ") end += 1;
     else if (prompt[start - 1] === " ") start -= 1;

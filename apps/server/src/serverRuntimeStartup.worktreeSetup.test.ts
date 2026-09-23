@@ -154,3 +154,37 @@ it.effect(
       );
     }),
 );
+
+it.effect("tells a fork interrupted before its worktree was ready to fork again", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread-fork");
+    const fork = recordedSetup("thread-fork", "running");
+    const snapshot = fork.payload;
+    const dispatched = yield* run([
+      {
+        ...fork,
+        payload: {
+          ...snapshot,
+          // A fork has no agent stage; it was still restoring its checkpoint.
+          stages: snapshot.stages
+            .filter((stage) => stage.id !== "agent")
+            .map((stage) =>
+              stage.id === "setup-script" ? { ...stage, id: "restore" as const } : stage,
+            ),
+        },
+      },
+    ]);
+
+    const command = dispatched[0]!;
+    if (command.type !== "thread.activity.append") return assert.fail(command.type);
+    assert.equal(command.threadId, threadId);
+    const payload = yield* Schema.decodeUnknownEffect(WorktreeSetupSnapshot)(
+      command.activity.payload,
+    );
+    assert.equal(payload.phase, "failed");
+    assert.equal(
+      payload.error,
+      "The server restarted before the fork's worktree was ready. Fork again.",
+    );
+  }),
+);

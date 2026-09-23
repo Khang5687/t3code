@@ -2,9 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { classifyTaskAgentKind, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import {
   deriveAgentPanelModel,
+  type DirectSpawnSort,
   foldSubagentActivities,
   formatSubagentModelLabel,
   formatSubagentTokenCount,
+  orderDirectSpawns,
+  type RuntimeSubagent,
 } from "./subagentRuntime.ts";
 
 let sequence = 0;
@@ -889,5 +892,268 @@ describe("nested agents vs subagent shells", () => {
       }),
     ]);
     expect(agents.map((agent) => agent.id)).toEqual(["nested-1"]);
+  });
+});
+
+function subagent(overrides: Partial<RuntimeSubagent> & { id: string }): RuntimeSubagent {
+  return {
+    kind: "subagent",
+    title: overrides.id,
+    role: null,
+    model: null,
+    effort: null,
+    status: "running",
+    activationCount: 1,
+    usage: null,
+    progress: null,
+    lastToolName: null,
+    result: null,
+    error: null,
+    outputFile: null,
+    parentAgentId: null,
+    agentIndex: null,
+    phaseIndex: null,
+    phaseTitle: null,
+    attempt: null,
+    workflowName: null,
+    phases: [],
+    runHandles: null,
+    recentActivity: [],
+    firstSeenAt: "2026-08-01T10:00:00.000Z",
+    startedAt: null,
+    completedAt: null,
+    updatedAt: "2026-08-01T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const NOW = Date.parse("2026-08-01T12:00:00.000Z");
+
+function groupedIds(rows: ReadonlyArray<RuntimeSubagent>) {
+  return Object.fromEntries(
+    orderDirectSpawns(rows, "status", NOW).map((group) => [
+      group.key,
+      group.rows.map((row) => row.id),
+    ]),
+  );
+}
+
+describe("orderDirectSpawns", () => {
+  it("splits rows into working, waiting, and settled (idle settles)", () => {
+    const rows = [
+      subagent({ id: "pending-1", status: "pending" }),
+      subagent({ id: "running-1", status: "running" }),
+      subagent({ id: "waiting-1", status: "waiting" }),
+      subagent({ id: "idle-1", status: "idle" }),
+      subagent({ id: "completed-1", status: "completed" }),
+      subagent({ id: "failed-1", status: "failed" }),
+      subagent({ id: "cancelled-1", status: "cancelled" }),
+      subagent({ id: "interrupted-1", status: "interrupted" }),
+    ];
+
+    const groups = orderDirectSpawns(rows, "status", NOW);
+    expect(groups.map((group) => group.key)).toEqual(["working", "waiting", "settled"]);
+    expect(groups.map((group) => group.count)).toEqual([2, 1, 5]);
+    expect(groups[0]!.rows.map((row) => row.id)).toEqual(["pending-1", "running-1"]);
+    expect(groups[1]!.rows.map((row) => row.id)).toEqual(["waiting-1"]);
+    expect(groups[2]!.rows.map((row) => row.id).toSorted()).toEqual([
+      "cancelled-1",
+      "completed-1",
+      "failed-1",
+      "idle-1",
+      "interrupted-1",
+    ]);
+  });
+
+  it("holds working and waiting order while activity, tokens, and progress change", () => {
+    const rows = [
+      subagent({ id: "b", firstSeenAt: "2026-08-01T10:00:01.000Z" }),
+      subagent({ id: "a", firstSeenAt: "2026-08-01T10:00:00.000Z" }),
+      subagent({ id: "c", firstSeenAt: "2026-08-01T10:00:02.000Z", status: "waiting" }),
+    ];
+    const before = groupedIds(rows);
+
+    const updated = rows.map((row) =>
+      row.id === "a"
+        ? {
+            ...row,
+            updatedAt: "2026-08-01T11:00:00.000Z",
+            progress: "reading files",
+            usage: { totalTokens: 9000 },
+          }
+        : row,
+    );
+
+    expect(groupedIds(updated)).toEqual(before);
+    expect(before.working).toEqual(["a", "b"]);
+  });
+
+  it("leads settled with the most recently finished run", () => {
+    const rows = [
+      subagent({ id: "old", status: "completed", completedAt: "2026-08-01T10:00:00.000Z" }),
+      subagent({ id: "newest", status: "failed", completedAt: "2026-08-01T12:00:00.000Z" }),
+      subagent({ id: "middle", status: "cancelled", completedAt: "2026-08-01T11:00:00.000Z" }),
+    ];
+
+    expect(groupedIds(rows).settled).toEqual(["newest", "middle", "old"]);
+  });
+
+  it("falls back to updatedAt when a settled row has no completedAt", () => {
+    const rows = [
+      subagent({ id: "done", status: "completed", completedAt: "2026-08-01T10:30:00.000Z" }),
+      subagent({ id: "idle", status: "idle", updatedAt: "2026-08-01T11:30:00.000Z" }),
+    ];
+
+    expect(groupedIds(rows).settled).toEqual(["idle", "done"]);
+  });
+
+  it("breaks ties by first seen then id", () => {
+    const rows = [
+      subagent({ id: "w-b", firstSeenAt: "2026-08-01T10:00:00.000Z" }),
+      subagent({ id: "w-a", firstSeenAt: "2026-08-01T10:00:00.000Z" }),
+      subagent({
+        id: "s-b",
+        status: "completed",
+        completedAt: "2026-08-01T10:00:00.000Z",
+        firstSeenAt: "2026-08-01T09:00:00.000Z",
+      }),
+      subagent({
+        id: "s-a",
+        status: "completed",
+        completedAt: "2026-08-01T10:00:00.000Z",
+        firstSeenAt: "2026-08-01T09:00:00.000Z",
+      }),
+      subagent({
+        id: "s-earlier-first-seen",
+        status: "completed",
+        completedAt: "2026-08-01T10:00:00.000Z",
+        firstSeenAt: "2026-08-01T08:00:00.000Z",
+      }),
+    ];
+
+    const groups = groupedIds(rows);
+    expect(groups.working).toEqual(["w-a", "w-b"]);
+    expect(groups.settled).toEqual(["s-earlier-first-seen", "s-a", "s-b"]);
+  });
+
+  it("sinks unparseable timestamps instead of throwing or shuffling survivors", () => {
+    const rows = [
+      subagent({ id: "broken", status: "completed", completedAt: "not-a-date", updatedAt: "nope" }),
+      subagent({ id: "newest", status: "completed", completedAt: "2026-08-01T12:00:00.000Z" }),
+      subagent({ id: "older", status: "completed", completedAt: "2026-08-01T11:00:00.000Z" }),
+    ];
+
+    expect(groupedIds(rows).settled).toEqual(["newest", "older", "broken"]);
+  });
+
+  it("returns the three empty groups for an empty roster", () => {
+    expect(orderDirectSpawns([], "status", NOW)).toEqual([
+      { key: "working", rows: [], count: 0 },
+      { key: "waiting", rows: [], count: 0 },
+      { key: "settled", rows: [], count: 0 },
+    ]);
+  });
+});
+
+describe("orderDirectSpawns sort modes", () => {
+  function sortedIds(rows: ReadonlyArray<RuntimeSubagent>, sort: DirectSpawnSort) {
+    return Object.fromEntries(
+      orderDirectSpawns(rows, sort, NOW).map((group) => [
+        group.key,
+        group.rows.map((row) => row.id),
+      ]),
+    );
+  }
+
+  it("orders by most recent update", () => {
+    const rows = [
+      subagent({ id: "stale", updatedAt: "2026-08-01T10:00:00.000Z" }),
+      subagent({ id: "freshest", updatedAt: "2026-08-01T11:30:00.000Z" }),
+      subagent({ id: "middle", updatedAt: "2026-08-01T11:00:00.000Z" }),
+      subagent({ id: "undated", updatedAt: "not-a-date" }),
+    ];
+
+    expect(sortedIds(rows, "recent-activity").working).toEqual([
+      "freshest",
+      "middle",
+      "stale",
+      "undated",
+    ]);
+  });
+
+  it("orders by elapsed time, measuring live rows against one now and sinking unstarted rows", () => {
+    const rows = [
+      subagent({
+        id: "short-settled",
+        status: "completed",
+        startedAt: "2026-08-01T11:00:00.000Z",
+        completedAt: "2026-08-01T11:05:00.000Z",
+      }),
+      subagent({
+        id: "live-longest",
+        status: "completed",
+        startedAt: "2026-08-01T09:00:00.000Z",
+        completedAt: null,
+      }),
+      subagent({ id: "never-started", status: "completed", startedAt: null }),
+      subagent({
+        id: "long-settled",
+        status: "completed",
+        startedAt: "2026-08-01T10:00:00.000Z",
+        completedAt: "2026-08-01T11:00:00.000Z",
+      }),
+    ];
+
+    expect(sortedIds(rows, "duration").settled).toEqual([
+      "live-longest",
+      "long-settled",
+      "short-settled",
+      "never-started",
+    ]);
+  });
+
+  it("orders by token spend, counting a missing usage as none", () => {
+    const rows = [
+      subagent({ id: "cheap", usage: { totalTokens: 10 } }),
+      subagent({ id: "unknown", usage: null }),
+      subagent({ id: "expensive", usage: { totalTokens: 9000 } }),
+    ];
+
+    expect(sortedIds(rows, "tokens").working).toEqual(["expensive", "cheap", "unknown"]);
+  });
+
+  it("orders by title the way a reader expects, not by code point", () => {
+    const rows = [
+      subagent({ id: "b", title: "Banana" }),
+      subagent({ id: "a", title: "apple" }),
+      subagent({ id: "c", title: "cherry" }),
+    ];
+
+    expect(sortedIds(rows, "name").working).toEqual(["a", "b", "c"]);
+  });
+
+  it("breaks ties by first seen, then id, so equal rows never shuffle", () => {
+    const rows = [
+      subagent({ id: "z-early", usage: null, firstSeenAt: "2026-08-01T08:00:00.000Z" }),
+      subagent({ id: "a-late", usage: null, firstSeenAt: "2026-08-01T09:00:00.000Z" }),
+      subagent({ id: "b-late", usage: null, firstSeenAt: "2026-08-01T09:00:00.000Z" }),
+    ];
+
+    expect(sortedIds(rows, "tokens").working).toEqual(["z-early", "a-late", "b-late"]);
+  });
+
+  it("keeps the three groups and their order under a non-default sort", () => {
+    const rows = [
+      subagent({ id: "settled-rich", status: "completed", usage: { totalTokens: 9000 } }),
+      subagent({ id: "working-poor", status: "running", usage: { totalTokens: 1 } }),
+      subagent({ id: "waiting-mid", status: "waiting", usage: { totalTokens: 100 } }),
+      subagent({ id: "working-rich", status: "running", usage: { totalTokens: 500 } }),
+    ];
+
+    const groups = orderDirectSpawns(rows, "tokens", NOW);
+    expect(groups.map((group) => group.key)).toEqual(["working", "waiting", "settled"]);
+    expect(groups[0]!.rows.map((row) => row.id)).toEqual(["working-rich", "working-poor"]);
+    expect(groups[1]!.rows.map((row) => row.id)).toEqual(["waiting-mid"]);
+    expect(groups[2]!.rows.map((row) => row.id)).toEqual(["settled-rich"]);
   });
 });

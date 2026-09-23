@@ -81,10 +81,13 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import * as ForkWorkspace from "./orchestration/ForkWorkspace.ts";
 import * as ServerConfig from "./config.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -545,6 +548,7 @@ const makeWsRpcLayer = (
         }
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+      const checkpointStore = yield* CheckpointStore.CheckpointStore;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
@@ -779,6 +783,73 @@ const makeWsRpcLayer = (
             }),
           ),
         );
+
+      // Shared by the worktree bootstrap and a new-worktree fork.
+      const recordSetupScriptLaunchFailure: ForkWorkspace.SetupScriptRecorders["recordSetupScriptLaunchFailure"] =
+        (input) => {
+          const detail = projectSetupScriptCompatibilityDetail(input.error);
+          return appendSetupScriptActivity({
+            threadId: input.threadId,
+            kind: "setup-script.failed",
+            summary: "Setup script failed to start",
+            createdAt: input.requestedAt,
+            payload: {
+              detail,
+              worktreePath: input.worktreePath,
+            },
+            tone: "error",
+          }).pipe(
+            Effect.ignoreCause({ log: false }),
+            Effect.flatMap(() =>
+              Effect.logWarning("failed to launch setup script", {
+                threadId: input.threadId,
+                worktreePath: input.worktreePath,
+                detail,
+              }),
+            ),
+          );
+        };
+
+      const recordSetupScriptStarted: ForkWorkspace.SetupScriptRecorders["recordSetupScriptStarted"] =
+        (input) =>
+          Effect.gen(function* () {
+            const startedAt = yield* nowIso;
+            const payload = {
+              scriptId: input.scriptId,
+              scriptName: input.scriptName,
+              terminalId: input.terminalId,
+              worktreePath: input.worktreePath,
+            };
+            yield* Effect.all([
+              appendSetupScriptActivity({
+                threadId: input.threadId,
+                kind: "setup-script.requested",
+                summary: "Starting setup script",
+                createdAt: input.requestedAt,
+                payload,
+                tone: "info",
+              }),
+              appendSetupScriptActivity({
+                threadId: input.threadId,
+                kind: "setup-script.started",
+                summary: "Setup script started",
+                createdAt: startedAt,
+                payload,
+                tone: "info",
+              }),
+            ]).pipe(
+              Effect.asVoid,
+              Effect.catch((error) =>
+                Effect.logWarning("launched setup script but failed to record setup activity", {
+                  threadId: input.threadId,
+                  worktreePath: input.worktreePath,
+                  scriptId: input.scriptId,
+                  terminalId: input.terminalId,
+                  detail: error.message,
+                }),
+              ),
+            );
+          });
 
       // The worktree setup's durable record: one activity per thread, upserted
       // by a fixed id when the setup starts and again when it settles. Live
@@ -1098,83 +1169,6 @@ const makeWsRpcLayer = (
                 )
               : Effect.succeed(false);
 
-          const recordSetupScriptLaunchFailure = (input: {
-            readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
-            readonly requestedAt: string;
-            readonly worktreePath: string;
-          }) => {
-            const detail = projectSetupScriptCompatibilityDetail(input.error);
-            return appendSetupScriptActivity({
-              threadId: command.threadId,
-              kind: "setup-script.failed",
-              summary: "Setup script failed to start",
-              createdAt: input.requestedAt,
-              payload: {
-                detail,
-                worktreePath: input.worktreePath,
-              },
-              tone: "error",
-            }).pipe(
-              Effect.ignoreCause({ log: false }),
-              Effect.flatMap(() =>
-                Effect.logWarning("bootstrap turn start failed to launch setup script", {
-                  threadId: command.threadId,
-                  worktreePath: input.worktreePath,
-                  detail,
-                }),
-              ),
-            );
-          };
-
-          const recordSetupScriptStarted = (input: {
-            readonly requestedAt: string;
-            readonly worktreePath: string;
-            readonly scriptId: string;
-            readonly scriptName: string;
-            readonly terminalId: string;
-          }) =>
-            Effect.gen(function* () {
-              const startedAt = yield* nowIso;
-              const payload = {
-                scriptId: input.scriptId,
-                scriptName: input.scriptName,
-                terminalId: input.terminalId,
-                worktreePath: input.worktreePath,
-              };
-              yield* Effect.all([
-                appendSetupScriptActivity({
-                  threadId: command.threadId,
-                  kind: "setup-script.requested",
-                  summary: "Starting setup script",
-                  createdAt: input.requestedAt,
-                  payload,
-                  tone: "info",
-                }),
-                appendSetupScriptActivity({
-                  threadId: command.threadId,
-                  kind: "setup-script.started",
-                  summary: "Setup script started",
-                  createdAt: startedAt,
-                  payload,
-                  tone: "info",
-                }),
-              ]).pipe(
-                Effect.asVoid,
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    "bootstrap turn start launched setup script but failed to record setup activity",
-                    {
-                      threadId: command.threadId,
-                      worktreePath: input.worktreePath,
-                      scriptId: input.scriptId,
-                      terminalId: input.terminalId,
-                      detail: error.message,
-                    },
-                  ),
-                ),
-              );
-            });
-
           const tracked = bootstrap?.prepareWorktree !== undefined;
           const threadId = command.threadId;
           const track = (effect: Effect.Effect<void>) => (tracked ? effect : Effect.void);
@@ -1212,6 +1206,7 @@ const makeWsRpcLayer = (
                   Effect.matchEffect({
                     onFailure: (error) =>
                       recordSetupScriptLaunchFailure({
+                        threadId,
                         error,
                         requestedAt,
                         worktreePath,
@@ -1241,6 +1236,7 @@ const makeWsRpcLayer = (
                       }
                       setupTerminalId = setupResult.terminalId;
                       return recordSetupScriptStarted({
+                        threadId,
                         requestedAt,
                         worktreePath,
                         scriptId: setupResult.scriptId,
@@ -1463,7 +1459,14 @@ const makeWsRpcLayer = (
                 preparingSessionSet = true;
               }
               yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
-              let checkoutTotal: number | null = null;
+              const checkout = WorktreeSetupTracker.trackWorktreeCheckout(
+                worktreeSetupTracker,
+                threadId,
+                (path) =>
+                  Effect.sync(() => {
+                    targetWorktreePath = path;
+                  }),
+              );
               const worktree = yield* gitWorkflow.createWorktree(
                 {
                   cwd: prepareWorktree.projectCwd,
@@ -1472,77 +1475,9 @@ const makeWsRpcLayer = (
                   baseRefName: prepareWorktree.baseBranch,
                   path: null,
                 },
-                {
-                  progress: {
-                    // Git has registered the directory at this point, so a
-                    // cancel during the submodule step can still remove it.
-                    onWorktreeClaimed: (path) =>
-                      Effect.sync(() => {
-                        targetWorktreePath = path;
-                      }),
-                    onCheckoutProgress: ({ percent, completed, total }) => {
-                      checkoutTotal = total;
-                      return worktreeSetupTracker.stage(threadId, "checkout", {
-                        percent,
-                        detail: `${completed.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} files`,
-                      });
-                    },
-                    onSubmodulesStarted: () =>
-                      worktreeSetupTracker
-                        .stageStatus(
-                          threadId,
-                          "checkout",
-                          "done",
-                          checkoutTotal === null
-                            ? null
-                            : `${checkoutTotal.toLocaleString("en-US")} files`,
-                        )
-                        .pipe(
-                          Effect.andThen(
-                            worktreeSetupTracker.stageStatus(threadId, "submodules", "running"),
-                          ),
-                        ),
-                    onSubmoduleLine: (line) => {
-                      const submodulePath = /Submodule path '([^']+)'/.exec(line)?.[1];
-                      return submodulePath === undefined
-                        ? Effect.void
-                        : worktreeSetupTracker.stage(threadId, "submodules", {
-                            detail: submodulePath,
-                          });
-                    },
-                    onSubmodulesFinished: ({ ok, detail }) =>
-                      worktreeSetupTracker.stageStatus(
-                        threadId,
-                        "submodules",
-                        ok ? "done" : "warning",
-                        ok ? undefined : (detail ?? "submodule checkout failed"),
-                      ),
-                  },
-                },
+                { progress: checkout.progress },
               );
-              const checkoutEndedAt = yield* nowIso;
-              yield* worktreeSetupTracker.update(threadId, (snapshot) => ({
-                ...snapshot,
-                worktreePath: worktree.worktree.path,
-                stages: snapshot.stages.map((stage) => {
-                  if (stage.id === "checkout" && stage.status === "running") {
-                    return {
-                      ...stage,
-                      status: "done",
-                      percent: 100,
-                      endedAt: checkoutEndedAt,
-                      detail:
-                        checkoutTotal === null
-                          ? stage.detail
-                          : `${checkoutTotal.toLocaleString("en-US")} files`,
-                    };
-                  }
-                  if (stage.id === "submodules" && stage.status === "pending") {
-                    return { ...stage, status: "skipped", detail: "none" };
-                  }
-                  return stage;
-                }),
-              }));
+              yield* checkout.settle(worktree.worktree.path);
               targetWorktreePath = worktree.worktree.path;
               yield* dispatchFromClient({
                 type: "thread.meta.update",
@@ -1733,7 +1668,7 @@ const makeWsRpcLayer = (
           return yield* runBootstrap;
         });
 
-      const dispatchNormalizedCommand = (
+      const enqueueNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
         const dispatchEffect =
@@ -1741,10 +1676,13 @@ const makeWsRpcLayer = (
             ? dispatchBootstrapTurnStart(normalizedCommand)
             : dispatchFromClient(normalizedCommand).pipe(
                 Effect.tap(({ sequence }) =>
-                  // Returning from thread.create is the handoff point at which
-                  // clients may start resources for the new incarnation. Use
-                  // its event sequence as the exact deletion-cleanup fence.
-                  normalizedCommand.type === "thread.create"
+                  // Returning from a thread-creating command is the handoff
+                  // point at which clients may start resources for the new
+                  // incarnation. Use its event sequence as the exact
+                  // deletion-cleanup fence. Fork counts: like create, it may
+                  // land on a soft-deleted id whose cleanup is still pending.
+                  normalizedCommand.type === "thread.create" ||
+                  normalizedCommand.type === "thread.fork"
                     ? threadDeletionReactor.drainThrough(sequence)
                     : Effect.void,
                 ),
@@ -1760,6 +1698,25 @@ const makeWsRpcLayer = (
               toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
             ),
           );
+      };
+
+      const rejectTurnWithoutWorktree = ForkWorkspace.rejectTurnWithoutWorktree({
+        worktreeSetupTracker,
+        projectionSnapshotQuery,
+      });
+
+      const dispatchNormalizedCommand = (
+        normalizedCommand: OrchestrationCommand,
+      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
+        // A new-worktree fork's checkout can run for minutes, so it runs off
+        // the command queue, after the fork lands.
+        if (normalizedCommand.type === "thread.fork") return forkThread(normalizedCommand);
+        if (normalizedCommand.type === "thread.turn.start" && !normalizedCommand.bootstrap) {
+          return rejectTurnWithoutWorktree(normalizedCommand.threadId).pipe(
+            Effect.andThen(enqueueNormalizedCommand(normalizedCommand)),
+          );
+        }
+        return enqueueNormalizedCommand(normalizedCommand);
       };
 
       // Only clients that answer /usage-limits themselves see it in the catalogs;
@@ -1829,6 +1786,37 @@ const makeWsRpcLayer = (
         vcsStatusBroadcaster
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+
+      const forkThread = ForkWorkspace.forkThread({
+        projectionSnapshotQuery,
+        gitWorkflow,
+        checkpointStore,
+        projectSetupScriptRunner,
+        worktreeSetupTracker,
+        newForkBranch: randomUUID.pipe(
+          Effect.map((uuid) => buildTemporaryWorktreeBranchName(() => uuid)),
+        ),
+        enqueue: enqueueNormalizedCommand,
+        setThreadWorkspace: ({ threadId, branch, worktreePath }) =>
+          serverCommandId("fork-thread-meta-update").pipe(
+            Effect.flatMap((commandId) =>
+              dispatchFromClient({
+                type: "thread.meta.update",
+                commandId,
+                threadId,
+                branch,
+                worktreePath,
+              }),
+            ),
+            Effect.andThen(refreshGitStatus(worktreePath)),
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to point the fork at its worktree."),
+            ),
+          ),
+        recordWorktreeSetup,
+        recordSetupScriptStarted,
+        recordSetupScriptLaunchFailure,
+      });
 
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -3630,7 +3618,7 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.subscribeServerLifecycle]: (_input) =>
+        [WS_METHODS.subscribeServerLifecycle]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerLifecycle,
             Effect.gen(function* () {
@@ -3646,7 +3634,13 @@ const makeWsRpcLayer = (
                 (left, right) => left.sequence - right.sequence,
               );
               const liveEvents = Stream.fromQueue(liveBuffer).pipe(
-                Stream.filter((event) => event.sequence > snapshot.sequence),
+                Stream.filter(
+                  (event) =>
+                    event.sequence > snapshot.sequence &&
+                    // A client that predates `moved` decodes the stream against
+                    // the old union and dies on an unknown member.
+                    (input.serverMoved === true || event.type !== "moved"),
+                ),
               );
               return Stream.concat(Stream.fromIterable(snapshotEvents), liveEvents);
             }),

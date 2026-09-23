@@ -41,7 +41,7 @@ export const widensExposure = (current: ListenInterfaces, next: ListenInterfaces
 /**
  * Rebuild `current`'s binds while keeping its peer allowlist. The panel has no
  * allowlist editor (it is set with `--allow-peer`), so every edit it does make
- * has to carry the allowlist through or the relaunch would silently drop it.
+ * has to carry the allowlist through or the rebind would silently drop it.
  */
 export const rebindSelection = (
   current: ListenInterfaces,
@@ -51,6 +51,22 @@ export const rebindSelection = (
     ...binds,
     ...(current.allowedPeers ? { allowedPeers: current.allowedPeers } : {}),
   });
+
+/**
+ * What the panel shows when an apply fails. Electron wraps a rejected IPC
+ * handler's error, so without this the user reads the channel name and the
+ * error tag before the sentence that tells them which address refused.
+ */
+export const formatExposureApplyError = (error: unknown): string => {
+  const fallback = "Failed to update exposure.";
+  const raw = error instanceof Error ? error.message : fallback;
+  return (
+    raw
+      .replace(/^Error invoking remote method '[^']*':\s*/u, "")
+      .replace(/^Desktop[A-Za-z]*Error:\s*/u, "")
+      .trim() || fallback
+  );
+};
 
 export const EXPOSURE_PRESET_OPTIONS: ReadonlyArray<{
   readonly preset: ExposurePreset;

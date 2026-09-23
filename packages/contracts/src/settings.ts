@@ -289,6 +289,22 @@ export const LoadBalancingWeights = Schema.Record(
 
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
+/** What a thread fork does once the fork exists. Per device, never synced. */
+export const AfterFork = Schema.Literals(["open", "stay"]);
+export type AfterFork = typeof AfterFork.Type;
+export const DEFAULT_AFTER_FORK: AfterFork = "open";
+
+export type AfterForkAction = "navigate" | "notify";
+
+/**
+ * The fork flow's branch point on both clients: navigate into the fork, or stay
+ * on the source and offer a way in. Takes `undefined` because mobile stores the
+ * choice as an optional preference that is unset until a device picks one.
+ */
+export function afterForkAction(setting: AfterFork | undefined): AfterForkAction {
+  return (setting ?? DEFAULT_AFTER_FORK) === "open" ? "navigate" : "notify";
+}
+
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -297,6 +313,7 @@ export const ClientSettingsSchema = Schema.Struct({
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
+  afterFork: AfterFork.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_AFTER_FORK))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -1592,6 +1609,7 @@ export const ClientSettingsPatch = Schema.Struct({
   notificationMode: Schema.optionalKey(NotificationMode),
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
+  afterFork: Schema.optionalKey(AfterFork),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),

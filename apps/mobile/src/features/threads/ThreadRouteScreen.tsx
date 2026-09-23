@@ -5,7 +5,11 @@ import {
   clearComposerDraftContent,
 } from "../../state/use-composer-drafts";
 import { useWorktreeSetup } from "./use-worktree-setup";
-import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import {
+  isOwnUserMessage,
+  strandedForkSendBlockReason,
+  worktreeSetupHandedOff,
+} from "@t3tools/client-runtime/worktree-setup";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
   StackActions,
@@ -21,6 +25,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ThreadId,
+  type OrchestrationMessage,
   type OrchestrationQueuedTurn,
   type ProjectScript,
 } from "@t3tools/contracts";
@@ -28,6 +33,7 @@ import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
+import { forkedFromLabel, resolveForkSource } from "@t3tools/client-runtime/thread-fork";
 import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
@@ -37,6 +43,7 @@ import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useEnvironmentShellState } from "../../state/shell";
+import { useThreadShell } from "../../state/entities";
 import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
 import { clearPendingThreadCreationOutcome } from "../../state/pending-thread-creation";
 import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draft";
@@ -75,6 +82,12 @@ import {
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import {
+  newWorktreeForkMessageIds,
+  threadSupportsConversationRollback,
+  type ThreadMessageMenu,
+} from "./thread-message-menu";
+import { useForkThreadFromMessage } from "./use-fork-thread-from-message";
+import {
   ThreadGitControls,
   useThreadGitCenterHeaderItems,
   useThreadGitRightHeaderItems,
@@ -110,6 +123,7 @@ interface ThreadInspectorSelection {
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
 
 const EMPTY_QUEUED_TURNS: ReadonlyArray<OrchestrationQueuedTurn> = [];
+const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
@@ -247,6 +261,7 @@ function ThreadRouteContent(
     showAuxiliaryPane,
     toggleAuxiliaryPane,
     togglePrimarySidebar,
+    selectThread,
   } = useAdaptiveWorkspaceLayout();
   const { connectionState } = useRemoteConnectionStatus();
   const { onReconnectEnvironment } = useRemoteConnections();
@@ -394,6 +409,85 @@ function ThreadRouteContent(
     [knownTerminalSessions, selectedThreadProject?.workspaceRoot],
   );
   const selectedThreadDetailWorktreePath = selectedThreadDetail?.worktreePath ?? null;
+
+  /* ─── Long-press menu on feed rows ───────────────────────────────── */
+  const forkFromMessage = useForkThreadFromMessage({
+    environmentId: selectedThread?.environmentId ?? null,
+    sourceThreadId: selectedThread?.id ?? null,
+  });
+  const isGitProject = gitStatus.data?.isRepo ?? false;
+  // Eligibility reads only each message's id, role and turn. Streaming replaces
+  // `messages` on every delta without touching those, so the scan (and the
+  // menu identity every feed row memoizes on) waits for the shape to change.
+  const threadMessages = selectedThreadDetail?.messages ?? EMPTY_MESSAGES;
+  const forkShapeKey = threadMessages
+    .map((message) => `${message.role}:${message.id}:${message.turnId ?? ""}`)
+    .join("\n");
+  const [forkShape, setForkShape] = useState({ key: forkShapeKey, messages: threadMessages });
+  if (forkShape.key !== forkShapeKey) {
+    setForkShape({ key: forkShapeKey, messages: threadMessages });
+  }
+  const newWorktreeMessageIds = useMemo(
+    () =>
+      newWorktreeForkMessageIds({
+        messages: forkShape.messages,
+        checkpoints: selectedThreadDetail?.checkpoints ?? [],
+        isGitProject,
+      }),
+    [forkShape.messages, isGitProject, selectedThreadDetail?.checkpoints],
+  );
+  const messageMenu = useMemo<ThreadMessageMenu>(
+    () => ({
+      forkSupported: threadSupportsConversationRollback({
+        providers: routeEnvironmentRuntime?.serverConfig?.providers ?? [],
+        sessionProviderInstanceId: selectedThread?.session?.providerInstanceId ?? null,
+        modelInstanceId: selectedThread?.modelSelection.instanceId ?? null,
+      }),
+      newWorktreeMessageIds,
+      onFork: (message, location) => {
+        void forkFromMessage(message, location);
+      },
+    }),
+    [
+      forkFromMessage,
+      newWorktreeMessageIds,
+      routeEnvironmentRuntime?.serverConfig?.providers,
+      selectedThread?.modelSelection.instanceId,
+      selectedThread?.session?.providerInstanceId,
+    ],
+  );
+  /* ─── "Forked from" line atop the feed ───────────────────────────── */
+  const forkOrigin = selectedThreadDetail?.forkedFrom ?? null;
+  const forkEnvironmentId = selectedThread?.environmentId ?? null;
+  const forkSourceRef = useMemo(
+    () =>
+      forkOrigin === null || forkEnvironmentId === null
+        ? null
+        : { environmentId: forkEnvironmentId, threadId: forkOrigin.threadId },
+    [forkOrigin, forkEnvironmentId],
+  );
+  const forkSourceShell = useThreadShell(forkSourceRef);
+  const forkShellsBootstrapped = Option.isSome(
+    useEnvironmentShellState(forkSourceRef?.environmentId ?? null).snapshot,
+  );
+  const forkedFrom = useMemo(() => {
+    if (forkSourceRef === null || forkOrigin === null) return null;
+    const source = resolveForkSource(
+      forkSourceRef,
+      forkOrigin,
+      forkSourceShell,
+      forkShellsBootstrapped,
+    );
+    if (source === null) return null;
+    const sourceRef = source.sourceRef;
+    return {
+      label: forkedFromLabel(source),
+      onPress:
+        sourceRef === null
+          ? null
+          : () => selectThread({ environmentId: sourceRef.environmentId, id: sourceRef.threadId }),
+    };
+  }, [forkOrigin, forkShellsBootstrapped, forkSourceRef, forkSourceShell, selectThread]);
   const handleReconnectEnvironment = useCallback(() => {
     if (!environmentId) {
       return;
@@ -849,13 +943,14 @@ function ThreadRouteContent(
     turnStarted: selectedThreadDetail?.latestTurn?.startedAt != null,
     followUpSent:
       composer.selectedThreadFeed.filter(
-        (entry) => entry.type === "message" && entry.message.role === "user",
+        (entry) => entry.type === "message" && isOwnUserMessage(entry.message),
       ).length +
         composer.selectedThreadQueuedMessages.length >
       1,
   });
   const awaitingBootstrapTurn =
-    worktreeSetup?.phase === "running" && !worktreeSetupAgentStarted(worktreeSetup);
+    worktreeSetup?.phase === "running" && !worktreeSetupHandedOff(worktreeSetup);
+  const strandedForkReason = strandedForkSendBlockReason(worktreeSetup, selectedThread);
   const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup);
   const handleCancelWorktreeSetup = useCallback(() => {
     if (!selectedThread) return;
@@ -1017,6 +1112,7 @@ function ThreadRouteContent(
           activeWorkStartedAt={composer.activeWorkStartedAt}
           isCompacting={composer.isCompacting}
           creationState={creationState}
+          sendBlockedReason={strandedForkReason}
           setupWorkingStartedAt={
             composer.activeWorkStartedAt !== null &&
             selectedThreadDetail?.activities.some(
@@ -1083,6 +1179,8 @@ function ThreadRouteContent(
           onChangeUserInputCustomAnswer={requests.onChangeUserInputCustomAnswer}
           onSubmitUserInput={requests.onSubmitUserInput}
           onDismissUserInput={requests.onDismissUserInput}
+          messageMenu={messageMenu}
+          forkedFrom={forkedFrom}
         />
       </View>
     </>

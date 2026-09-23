@@ -108,24 +108,41 @@ const REJECTION_LOG_INTERVAL_MS = 60_000;
 const REJECTION_LOG_MAX_TRACKED_PEERS = 1_000;
 
 /**
- * Destroys connections from peers outside `allowedPeers` before the HTTP parser
- * sees them, so a rejected peer gets a reset and zero response bytes. Entries
- * that do not parse as IPv4 or IPv4 CIDR are dropped rather than failing the
- * bind; the resolver always seeds loopback, so the list is never empty in
- * practice and a typo cannot lock the machine out of its own server.
+ * Destroys connections from peers outside the current allowlist before the HTTP
+ * parser sees them, so a rejected peer gets a reset and zero response bytes.
+ * Entries that do not parse as IPv4 or IPv4 CIDR are dropped rather than
+ * failing the bind; the resolver always seeds loopback, so the list is never
+ * empty in practice and a typo cannot lock the machine out of its own server.
+ *
+ * The list arrives as a thunk because a live rebind recomputes it while
+ * listeners stay open (ADR 0003, Amendment 1): a listener whose address is in
+ * both the old and the new selection is never recreated, so reading the list
+ * per connection is the only way it can follow the new selection. `undefined`
+ * means no allowlist was asked for, and the bind is the only gate.
  *
  * `onRejected` is called at most once per peer per minute, since a client that
  * retries in a loop would otherwise fill the log.
  */
 export function guardPeerAllowlist<T extends NodeHttp.Server>(
   server: T,
-  allowedPeers: ReadonlyArray<string>,
+  allowedPeers: () => ReadonlyArray<string> | undefined,
   onRejected?: (address: string) => void,
 ): T {
-  const allowed = allowedPeers.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== undefined);
+  // Parsed once per distinct list, not once per connection: the thunk returns
+  // the same array until a rebind swaps it.
+  let parsedFrom: ReadonlyArray<string> | undefined;
+  let allowed: ReadonlyArray<Cidr> = [];
   const lastLoggedAt = new Map<string, number>();
 
   server.on("connection", (socket: NodeNet.Socket) => {
+    const current = allowedPeers();
+    if (current === undefined) {
+      return;
+    }
+    if (current !== parsedFrom) {
+      parsedFrom = current;
+      allowed = current.map(parseCidr).filter((cidr): cidr is Cidr => cidr !== undefined);
+    }
     const address = socket.remoteAddress;
     if (isPeerAllowed(address, allowed)) {
       return;

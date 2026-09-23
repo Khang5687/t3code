@@ -1453,6 +1453,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...parsed,
           threadId,
           provider: resolvedProvider,
+          // Server-internal, so the wire schema above drops it.
+          ...(rawInput.forkResumeCursor === true ? { forkResumeCursor: true } : {}),
         };
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
@@ -1481,11 +1483,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             );
           }
         }
+        // `null` is an explicit "start fresh": it stops a persisted cursor from
+        // resuming the very session the caller means to replace. A persisted
+        // null is just an absent cursor.
         const effectiveResumeCursor =
-          input.resumeCursor ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? persistedBinding.resumeCursor
-            : undefined);
+          input.resumeCursor === null
+            ? undefined
+            : (input.resumeCursor ??
+              (persistedBinding?.providerInstanceId === resolvedInstanceId
+                ? (persistedBinding.resumeCursor ?? undefined)
+                : undefined));
         const effectiveCwd =
           input.cwd ??
           (persistedBinding?.providerInstanceId === resolvedInstanceId
@@ -2233,6 +2240,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
     });
 
+  const getPersistedResumeCursor: ProviderServiceMethod<"getPersistedResumeCursor"> = (threadId) =>
+    directory
+      .getBinding(threadId)
+      .pipe(Effect.map((binding) => Option.getOrUndefined(binding)?.resumeCursor ?? undefined));
+
   const rollbackConversation: ProviderServiceMethod<"rollbackConversation"> = Effect.fn(
     "rollbackConversation",
   )(function* (rawInput) {
@@ -2441,6 +2453,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     assertConversationRollbackSupported,
+    getPersistedResumeCursor,
     rollbackConversation,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple

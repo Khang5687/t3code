@@ -10,6 +10,7 @@ import {
   ForwardCompatibleArray,
   IsoDateTime,
   NonNegativeInt,
+  PortSchema,
   PositiveInt,
   ProjectId,
   ThreadId,
@@ -795,9 +796,35 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
+/**
+ * The listener set moved under the clients (ADR 0003, Amendment 1). The process
+ * kept running, so this is not a `ready`: turns and provider sessions survived.
+ */
+export const ServerLifecycleMovedPayload = Schema.Struct({
+  /** The port every address in the new set is bound on. */
+  port: PortSchema,
+  /**
+   * True when the port moved. A listener is keyed by host *and* port, so a port
+   * change retires every previous listener and drops every connected client,
+   * while an interface-only change leaves the sockets on the addresses that
+   * stayed exactly where they are.
+   */
+  portChanged: Schema.Boolean,
+});
+export type ServerLifecycleMovedPayload = typeof ServerLifecycleMovedPayload.Type;
+
+export const ServerLifecycleStreamMovedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  sequence: NonNegativeInt,
+  type: Schema.Literal("moved"),
+  payload: ServerLifecycleMovedPayload,
+});
+export type ServerLifecycleStreamMovedEvent = typeof ServerLifecycleStreamMovedEvent.Type;
+
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
+  ServerLifecycleStreamMovedEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 

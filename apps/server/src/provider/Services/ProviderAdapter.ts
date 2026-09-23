@@ -53,6 +53,26 @@ export interface ProviderAdapterCapabilities {
   readonly promptlessTurnContinuation?: boolean;
   /** False when native conversation history cannot be rewound. */
   readonly supportsConversationRollback?: boolean;
+  /**
+   * True when `startSession` with `forkResumeCursor` followed by
+   * `rollbackThread` leaves the conversation behind the cursor untouched, so a
+   * fork can resume its source natively. Omitted means a fork seeds a fresh
+   * session from its copied transcript instead.
+   */
+  readonly supportsForkResume?: boolean;
+}
+
+/**
+ * The wire input plus server-internal session start options, kept off the
+ * wire the same way as `ProviderAdapterSendTurnInput`.
+ */
+export interface ProviderAdapterStartSessionInput extends ProviderSessionStartInput {
+  /**
+   * Open a copy of the conversation behind `resumeCursor` under a new native
+   * id instead of resuming it. Only sent to adapters that report
+   * `supportsForkResume`; adapters that fork inside `rollbackThread` ignore it.
+   */
+  readonly forkResumeCursor?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -89,7 +109,7 @@ export interface ProviderAdapterShape<TError> {
    * Start a provider-backed session.
    */
   readonly startSession: (
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterStartSessionInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**

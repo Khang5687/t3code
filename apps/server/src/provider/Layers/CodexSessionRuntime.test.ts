@@ -983,14 +983,11 @@ describe("openCodexThread", () => {
 
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
-      const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+      const calls: Array<{ method: string; payload: unknown }> = [];
       const started = makeThreadOpenResponse("fresh-thread");
       const client = {
         raw: {
-          request: (
-            method: "thread/resume",
-            payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"],
-          ) => {
+          request: (method: string, payload: unknown) => {
             calls.push({ method, payload });
             return Effect.fail(
               new CodexErrors.CodexAppServerRequestError({
@@ -1054,6 +1051,82 @@ describe("openCodexThread", () => {
 
       NodeAssert.ok(isCodexAppServerRequestError(error));
       NodeAssert.equal(error.errorMessage, "timed out waiting for server");
+    }),
+  );
+
+  it.effect("forks the source into its own native thread so a rewind leaves the source alone", () =>
+    Effect.gen(function* () {
+      const history = new Map([["source-thread", ["turn-1", "turn-2", "turn-3"]]]);
+      const methods: string[] = [];
+      const client = {
+        request: (method: string, params: unknown) =>
+          Effect.sync(() => {
+            methods.push(method);
+            NodeAssert.equal(method, "thread/rollback", "A fork must never start fresh");
+            const { threadId, numTurns } = params as { threadId: string; numTurns: number };
+            const turns = history.get(threadId) ?? [];
+            history.set(threadId, turns.slice(0, turns.length - numTurns));
+            return { thread: { id: threadId, turns: [] } };
+          }),
+        raw: {
+          request: (method: string, params: unknown) =>
+            Effect.sync(() => {
+              methods.push(method);
+              if (method === "thread/read") return { thread: {} };
+              NodeAssert.equal(method, "thread/fork");
+              const { threadId } = params as { threadId: string };
+              history.set("fork-thread", [...(history.get(threadId) ?? [])]);
+              return makeThreadOpenResponse("fork-thread");
+            }),
+        },
+      } as unknown as Parameters<typeof openCodexThread>[0]["client"] &
+        Parameters<typeof rollbackCodexThread>[0];
+
+      const opened = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-fork"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: "source-thread",
+        forkResumeThread: true,
+      });
+      yield* rollbackCodexThread(client, opened.thread.id, 2);
+
+      NodeAssert.equal(opened.thread.id, "fork-thread");
+      NodeAssert.deepStrictEqual(history.get("fork-thread"), ["turn-1"]);
+      NodeAssert.deepStrictEqual(history.get("source-thread"), ["turn-1", "turn-2", "turn-3"]);
+      NodeAssert.deepStrictEqual(methods, ["thread/fork", "thread/read", "thread/rollback"]);
+    }),
+  );
+
+  it.effect("fails a fork whose source rollout is gone instead of starting fresh", () =>
+    Effect.gen(function* () {
+      const error = yield* openCodexThread({
+        client: {
+          request: () => Effect.die("A fork must never fall back to thread/start"),
+          raw: {
+            request: () =>
+              Effect.fail(
+                new CodexErrors.CodexAppServerRequestError({
+                  code: -32603,
+                  errorMessage: "no rollout found for thread id source-thread",
+                }),
+              ),
+          },
+        },
+        threadId: ThreadId.make("thread-fork"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: "source-thread",
+        forkResumeThread: true,
+      }).pipe(Effect.flip);
+
+      NodeAssert.ok(isCodexAppServerRequestError(error));
+      NodeAssert.match(error.errorMessage, /no rollout found/);
     }),
   );
 });

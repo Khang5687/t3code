@@ -3,7 +3,7 @@ import {
   type WorktreeSetupSnapshot,
   type WorktreeSetupStage,
 } from "@t3tools/contracts";
-import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { worktreeSetupHandedOff } from "@t3tools/client-runtime/worktree-setup";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, ScrollView, View } from "react-native";
@@ -39,7 +39,7 @@ const icons: Record<WorktreeSetupStage["status"], AppSymbolName> = {
 /** Setup stages collapse into the working header once the agent's turn is live. */
 export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
   const { snapshot, turnStarted, turnStartedAt, working } = props;
-  const handedOff = turnStarted && worktreeSetupAgentStarted(snapshot);
+  const handedOff = turnStarted && worktreeSetupHandedOff(snapshot);
   const running = snapshot.phase === "running";
   const backgroundSetup = handedOff && running;
   const scriptName = snapshot.setupScript?.name ?? "Setup script";

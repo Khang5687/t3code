@@ -1,6 +1,7 @@
 import {
   CommandId,
   EnvironmentId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
@@ -24,6 +25,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   archiveThread,
   createProject,
+  forkThread,
   revertThreadCheckpoint,
   reorderActiveThread,
   settleThread,
@@ -119,6 +121,35 @@ describe("environment commands", () => {
         "thread.checkpoint.revert",
         "thread.checkpoint.revert",
         "thread.conversation.revert",
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("forks a thread at a boundary message", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* forkThread({
+        commandId: CommandId.make("fork-command"),
+        sourceThreadId: ThreadId.make("thread-1"),
+        threadId: ThreadId.make("thread-2"),
+        messageId: MessageId.make("message-1"),
+        location: "new-worktree",
+        createdAt: "2026-06-06T00:02:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "thread.fork",
+          commandId: "fork-command",
+          sourceThreadId: "thread-1",
+          threadId: "thread-2",
+          messageId: "message-1",
+          // The server prepares the worktree; the client only asks for one.
+          location: "new-worktree",
+          createdAt: "2026-06-06T00:02:00.000Z",
+        },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );

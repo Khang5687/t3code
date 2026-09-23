@@ -3,15 +3,18 @@ import {
   type EditorId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
+  type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { forkedFromLabel } from "@t3tools/client-runtime/thread-fork";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -25,6 +28,7 @@ import {
 import GitActionsControl from "../GitActionsControl";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
 import { type DraftId } from "~/composerDraftStore";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import ProjectScriptsControl, {
@@ -73,6 +77,12 @@ interface ChatHeaderProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /**
+   * The thread this one was forked from. Both fields go null once the source
+   * has been deleted, which names it generically and drops the link rather
+   * than pointing at a thread that is no longer there.
+   */
+  forkSource?: { readonly title: string | null; readonly sourceRef: ScopedThreadRef | null } | null;
 }
 
 /**
@@ -136,6 +146,7 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onRunProjectScript,
+  forkSource,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
@@ -299,6 +310,9 @@ export const ChatHeader = memo(function ChatHeader({
     },
     [cancelPendingTitleMenu, isServerThread, onOpenProjectSettings, openMenu, renamingTitle],
   );
+  // A title-less source is one the caller has confirmed is gone; it still gets
+  // the line, just without a name or a link to follow.
+  const forkedFromText = forkSource == null ? null : forkedFromLabel(forkSource);
   const handleRenameKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -399,6 +413,32 @@ export const ChatHeader = memo(function ChatHeader({
             </Tooltip>
           )}
         </WorkspaceBreadcrumbItem>
+        {forkedFromText !== null && forkSource ? (
+          <>
+            <WorkspaceBreadcrumbSeparator />
+            <WorkspaceBreadcrumbItem className="max-w-48 shrink">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    forkSource.sourceRef === null ? (
+                      <span className="inline-flex min-w-0 items-center gap-1.5 font-normal" />
+                    ) : (
+                      <Link
+                        to="/$environmentId/$threadId"
+                        params={buildThreadRouteParams(forkSource.sourceRef)}
+                        className="inline-flex min-w-0 items-center gap-1.5 rounded-sm font-normal text-inherit no-underline transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                    )
+                  }
+                >
+                  <GitBranchIcon aria-hidden className="size-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">{forkedFromText}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">{forkedFromText}</TooltipPopup>
+              </Tooltip>
+            </WorkspaceBreadcrumbItem>
+          </>
+        ) : null}
       </WorkspaceBreadcrumb>
       <div
         ref={headerActionsRef}

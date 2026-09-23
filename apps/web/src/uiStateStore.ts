@@ -1,4 +1,8 @@
 import { Debouncer } from "@tanstack/react-pacer";
+import {
+  DIRECT_SPAWN_SORTS,
+  type DirectSpawnSort,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import type { PullRequestMergeMethod } from "@t3tools/contracts";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
@@ -31,6 +35,7 @@ export interface PersistedUiState {
   threadChangedFilesExpansionVersion?: number;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   pullRequestMergeMethod?: string;
+  agentsPanelSort?: string;
 }
 
 export interface UiProjectState {
@@ -55,8 +60,12 @@ export interface UiPullRequestState {
   pullRequestMergeMethod: PullRequestMergeMethod;
 }
 
+export interface UiAgentsPanelState {
+  agentsPanelSort: DirectSpawnSort;
+}
+
 export interface UiState
-  extends UiProjectState, UiThreadState, UiEndpointState, UiPullRequestState {}
+  extends UiProjectState, UiThreadState, UiEndpointState, UiPullRequestState, UiAgentsPanelState {}
 
 const initialState: UiState = {
   projectExpandedById: {},
@@ -66,6 +75,7 @@ const initialState: UiState = {
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
+  agentsPanelSort: "status",
 };
 
 const LEGACY_PROJECT_CWD_PREFERENCE_PREFIX = "legacy-project-cwd:";
@@ -121,6 +131,10 @@ function isPullRequestMergeMethod(value: unknown): value is PullRequestMergeMeth
   return value === "merge" || value === "squash" || value === "rebase";
 }
 
+function isDirectSpawnSort(value: unknown): value is DirectSpawnSort {
+  return DIRECT_SPAWN_SORTS.includes(value as DirectSpawnSort);
+}
+
 export function parsePersistedState(parsed: PersistedUiState): UiState {
   const projectExpandedById =
     parsed.projectExpandedById === undefined
@@ -158,6 +172,9 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
+    agentsPanelSort: isDirectSpawnSort(parsed.agentsPanelSort)
+      ? parsed.agentsPanelSort
+      : initialState.agentsPanelSort,
   };
 }
 
@@ -232,6 +249,7 @@ export function persistState(state: UiState): void {
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
+        agentsPanelSort: state.agentsPanelSort,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -346,6 +364,10 @@ function setPullRequestMergeMethod(state: UiState, method: PullRequestMergeMetho
     : { ...state, pullRequestMergeMethod: method };
 }
 
+function setAgentsPanelSort(state: UiState, sort: DirectSpawnSort): UiState {
+  return state.agentsPanelSort === sort ? state : { ...state, agentsPanelSort: sort };
+}
+
 export function resolveProjectExpanded(
   projectExpandedById: Readonly<Record<string, boolean>>,
   preferenceKeys: readonly string[],
@@ -430,6 +452,7 @@ interface UiStateStore extends UiState {
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setSidebarProjectScopeKey: (projectKey: string | null) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
+  setAgentsPanelSort: (sort: DirectSpawnSort) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
@@ -451,6 +474,7 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setSidebarProjectScopeKey: (projectKey) =>
     set((state) => setSidebarProjectScopeKey(state, projectKey)),
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),
+  setAgentsPanelSort: (sort) => set((state) => setAgentsPanelSort(state, sort)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>

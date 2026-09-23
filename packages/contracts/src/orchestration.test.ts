@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
+import { CommandId, MessageId, ProjectId, ThreadId, TurnId } from "./baseSchemas.ts";
 
 import {
   ProjectIconOverride,
@@ -31,10 +31,15 @@ import {
   ThreadLinkedPullRequest,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
+  ThreadForkOrigin,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
   SnapShotAccessibility,
   isProviderSendTurnSupportedImageMimeType,
+  canForkIntoNewWorktree,
+  hasThreadCheckpointForTurn,
+  resolveForkBoundary,
+  resolveForkCheckpointTurn,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -1617,6 +1622,7 @@ it.effect("sends monograms as fallback icons that old and nightly clients can de
 
 const encodeProjectShell = Schema.encodeEffect(OrchestrationProjectShell);
 const encodeClientCommand = Schema.encodeEffect(ClientOrchestrationCommand);
+const decodeClientCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeLegacyShell = Schema.decodeUnknownEffect(
   Schema.Struct({
     ...OrchestrationProjectShell.fields,
@@ -1655,5 +1661,97 @@ it.effect("encodes compatible icons inside snapshots and client commands", () =>
     });
     if (command.type !== "project.meta.update") throw new Error("Unexpected command");
     assert.deepEqual(yield* decodeNightlyIcon(command.projectIcon), fallback);
+  }),
+);
+
+const forkMessages = [
+  { id: MessageId.make("u1"), role: "user" as const },
+  { id: MessageId.make("a1"), role: "assistant" as const },
+  { id: MessageId.make("u2"), role: "user" as const },
+  { id: MessageId.make("a2"), role: "assistant" as const },
+  { id: MessageId.make("u3"), role: "user" as const },
+];
+
+it("resolves a fork boundary to the cut index and the turns before it", () => {
+  assert.deepEqual(resolveForkBoundary(forkMessages, MessageId.make("u1")), {
+    index: 0,
+    turnCount: 0,
+  });
+  assert.deepEqual(resolveForkBoundary(forkMessages, MessageId.make("u3")), {
+    index: 4,
+    turnCount: 2,
+  });
+  // Only user messages are cut points, and an unknown id is not one either.
+  assert.isUndefined(resolveForkBoundary(forkMessages, MessageId.make("a1")));
+  assert.isUndefined(resolveForkBoundary(forkMessages, MessageId.make("nope")));
+});
+
+it("treats turn 0 as restorable and any later turn as needing a ready checkpoint", () => {
+  const checkpoints = [
+    { checkpointTurnCount: 2, status: "ready" as const },
+    { checkpointTurnCount: 3, status: "missing" as const },
+  ];
+  assert.isTrue(hasThreadCheckpointForTurn([], 0));
+  assert.isTrue(hasThreadCheckpointForTurn(checkpoints, 2));
+  assert.isFalse(hasThreadCheckpointForTurn(checkpoints, 1));
+  // A capture that never landed is not something a fork can restore.
+  assert.isFalse(hasThreadCheckpointForTurn(checkpoints, 3));
+});
+
+it("keys a fork's checkpoint to the turns it copies, not to its user messages", () => {
+  // Copied history: three user messages that ran no turn in this thread, then
+  // two turns of its own. Counting user messages would call the cut point turn
+  // 4 and restore turn 2's files; the turn ids say turn 1.
+  const messages = [
+    { turnId: null },
+    { turnId: null },
+    { turnId: null },
+    { turnId: TurnId.make("turn-1") },
+    { turnId: null },
+    { turnId: TurnId.make("turn-2") },
+  ];
+  const checkpoints = [
+    { turnId: TurnId.make("turn-1"), checkpointTurnCount: 1 },
+    { turnId: TurnId.make("turn-2"), checkpointTurnCount: 2 },
+  ];
+  assert.strictEqual(resolveForkCheckpointTurn(messages, checkpoints, 4), 1);
+  assert.strictEqual(resolveForkCheckpointTurn(messages, checkpoints, 6), 2);
+  // Cutting inside the copied history reaches no turn of this thread's own.
+  assert.strictEqual(resolveForkCheckpointTurn(messages, checkpoints, 2), 0);
+});
+
+it("offers a new-worktree fork only with a git project and a boundary checkpoint", () => {
+  assert.isTrue(canForkIntoNewWorktree(true, true));
+  assert.isFalse(canForkIntoNewWorktree(false, true));
+  assert.isFalse(canForkIntoNewWorktree(true, false));
+});
+
+it.effect("defaults a fork that names no location to the source's workspace", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientCommand({
+      type: "thread.fork",
+      commandId: "cmd-fork",
+      sourceThreadId: "thread-source",
+      threadId: "thread-fork",
+      messageId: "u2",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    if (command.type !== "thread.fork") throw new Error("Unexpected command");
+    assert.strictEqual(command.location, "same-workspace");
+  }),
+);
+
+it.effect("round-trips a fork origin's recorded title through its stored JSON", () =>
+  Effect.gen(function* () {
+    // `projection_threads.forked_from_json` stores the origin whole with this codec.
+    const codec = Schema.fromJsonString(ThreadForkOrigin);
+    const origin = { threadId: ThreadId.make("thread-source"), turnCount: 2, title: "Source" };
+    const decoded = yield* Schema.decodeEffect(codec)(yield* Schema.encodeEffect(codec)(origin));
+    assert.deepStrictEqual(decoded, origin);
+    // Origins recorded before titles were captured still decode, untitled.
+    const legacy = yield* Schema.decodeUnknownEffect(codec)(
+      '{"threadId":"thread-source","turnCount":2}',
+    );
+    assert.isUndefined(legacy.title);
   }),
 );

@@ -19,6 +19,8 @@
  */
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
+import { toSortableTimestamp } from "./threadSort.ts";
+
 export type RuntimeSubagentStatus =
   | "pending"
   | "running"
@@ -859,6 +861,115 @@ export function deriveAgentPanelModel({
     hasAgents: true,
     liveCount: runningCount + waitingCount,
   };
+}
+
+/** Order inside each direct-spawn group, in the order the picker offers them. */
+export const DIRECT_SPAWN_SORTS = [
+  "status",
+  "recent-activity",
+  "duration",
+  "tokens",
+  "name",
+] as const;
+
+export type DirectSpawnSort = (typeof DIRECT_SPAWN_SORTS)[number];
+
+export interface DirectSpawnGroup {
+  readonly key: "working" | "waiting" | "settled";
+  readonly rows: ReadonlyArray<RuntimeSubagent>;
+  readonly count: number;
+}
+
+/** Recency a settled row sorts by: completedAt when stamped (idle rows never
+    are), else its last update. Unparseable stamps sink to the bottom. */
+function settledRecencyMs(agent: RuntimeSubagent): number {
+  return (
+    toSortableTimestamp(agent.completedAt ?? undefined) ??
+    toSortableTimestamp(agent.updatedAt) ??
+    Number.NEGATIVE_INFINITY
+  );
+}
+
+function compareFirstSeen(left: RuntimeSubagent, right: RuntimeSubagent): number {
+  return left.firstSeenAt.localeCompare(right.firstSeenAt) || left.id.localeCompare(right.id);
+}
+
+type RowComparator = (left: RuntimeSubagent, right: RuntimeSubagent) => number;
+
+/** Highest key first, first-seen (then id) for ties, so every order is total
+    and stable. Subtracting would yield NaN when both keys are -Infinity. */
+function byDescending(key: (agent: RuntimeSubagent) => number): RowComparator {
+  return (left, right) => {
+    const leftKey = key(left);
+    const rightKey = key(right);
+    return (leftKey > rightKey ? -1 : leftKey < rightKey ? 1 : 0) || compareFirstSeen(left, right);
+  };
+}
+
+/** How long this activation has run. Unstarted rows sink to the bottom. */
+function elapsedMs(agent: RuntimeSubagent, nowMs: number): number {
+  const startedMs = toSortableTimestamp(agent.startedAt ?? undefined);
+  if (startedMs === null) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  return (toSortableTimestamp(agent.completedAt ?? undefined) ?? nowMs) - startedMs;
+}
+
+/** The comparator for a non-default sort, or null to keep per-group defaults. */
+function rowComparator(sort: DirectSpawnSort, nowMs: number): RowComparator | null {
+  switch (sort) {
+    case "recent-activity":
+      return byDescending(
+        (agent) => toSortableTimestamp(agent.updatedAt) ?? Number.NEGATIVE_INFINITY,
+      );
+    case "duration":
+      return byDescending((agent) => elapsedMs(agent, nowMs));
+    case "tokens":
+      return byDescending((agent) => agent.usage?.totalTokens ?? 0);
+    case "name":
+      return (left, right) =>
+        left.title.localeCompare(right.title) || compareFirstSeen(left, right);
+    case "status":
+      return null;
+  }
+}
+
+/**
+ * Direct spawns split into the panel's three status groups. The groups always
+ * run Working, Waiting, Settled; `sort` only picks the order inside one.
+ * Under "status", Working and Waiting keep first-seen order so a streaming row
+ * never moves and only a status change relocates it, and Settled leads with
+ * the most recently finished run. Idle joins Settled: the panel already paints
+ * it as settled-ish.
+ *
+ * `nowMs` is read once per call so "duration" ranks live rows at render time
+ * rather than re-sorting them every second; their displayed timers keep
+ * ticking past the ranking.
+ */
+export function orderDirectSpawns(
+  rows: ReadonlyArray<RuntimeSubagent>,
+  sort: DirectSpawnSort,
+  nowMs: number,
+): ReadonlyArray<DirectSpawnGroup> {
+  const working: RuntimeSubagent[] = [];
+  const waiting: RuntimeSubagent[] = [];
+  const settled: RuntimeSubagent[] = [];
+  for (const agent of rows) {
+    if (agent.status === "pending" || agent.status === "running") working.push(agent);
+    else if (agent.status === "waiting") waiting.push(agent);
+    else settled.push(agent);
+  }
+
+  const comparator = rowComparator(sort, nowMs);
+  working.sort(comparator ?? compareFirstSeen);
+  waiting.sort(comparator ?? compareFirstSeen);
+  settled.sort(comparator ?? byDescending(settledRecencyMs));
+
+  return [
+    { key: "working", rows: working, count: working.length },
+    { key: "waiting", rows: waiting, count: waiting.length },
+    { key: "settled", rows: settled, count: settled.length },
+  ];
 }
 
 /**

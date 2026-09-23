@@ -51,3 +51,27 @@ it.effect(
       assert.deepEqual(snapshot.events.map((event) => event.type).toSorted(), ["ready", "welcome"]);
     }).pipe(Effect.provide(ServerLifecycleEvents.layer)),
 );
+
+it.effect("never replays a move to a later subscriber", () =>
+  Effect.gen(function* () {
+    const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+
+    const moved = yield* lifecycleEvents.publish({
+      version: 1,
+      type: "moved",
+      payload: { port: 4180, portChanged: true },
+    });
+
+    const snapshot = yield* lifecycleEvents.snapshot;
+    // A snapshot is replayed to every new subscriber, so a retained move would
+    // fire the "server moved" toast on every reconnect from then on.
+    assert.deepEqual(
+      snapshot.events.map((event) => event.type),
+      [],
+    );
+    // The sequence still advances, so the live filter a subscriber applies
+    // (`sequence > snapshot.sequence`) cannot swallow the next real event.
+    assert.equal(moved.sequence, 1);
+    assert.equal(snapshot.sequence, 1);
+  }).pipe(Effect.provide(ServerLifecycleEvents.layer)),
+);

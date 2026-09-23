@@ -431,4 +431,69 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
       }),
     );
   });
+
+  describe("restoreCheckpoint", () => {
+    // What a "fork into a new worktree" does: the boundary checkpoint was
+    // captured in the source's checkout, and the fork restores it into a
+    // sibling worktree of the same repository. Checkpoint refs live in the
+    // shared ref store, not the per-worktree one, so the sibling resolves the
+    // ref and the objects behind it without reaching into the source's git dir.
+    it.effect("restores a sibling worktree to a checkpoint the source captured", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const source = yield* makeTmpDir("checkpoint-restore-source-");
+        yield* initRepoWithCommit(source);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("thread-fork-source");
+        const checkpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+        yield* writeTextFile(NodePath.join(source, "app.ts"), "export const answer = 42;\n");
+        yield* checkpointStore.captureCheckpoint({ cwd: source, checkpointRef });
+
+        // The source keeps working past the boundary the fork was cut at.
+        yield* writeTextFile(NodePath.join(source, "app.ts"), "export const answer = 43;\n");
+        yield* writeTextFile(NodePath.join(source, "later.ts"), "export const later = true;\n");
+
+        const forkPath = NodePath.join(yield* makeTmpDir("checkpoint-restore-fork-"), "worktree");
+        yield* git(source, ["worktree", "add", "-b", "t3/fork", forkPath, "HEAD"]);
+
+        expect(yield* checkpointStore.restoreCheckpoint({ cwd: forkPath, checkpointRef })).toBe(
+          true,
+        );
+
+        expect(yield* fileSystem.readFileString(NodePath.join(forkPath, "app.ts"))).toBe(
+          "export const answer = 42;\n",
+        );
+        expect(yield* fileSystem.exists(NodePath.join(forkPath, "later.ts"))).toBe(false);
+        // The fork never reaches back into the workspace it branched from.
+        expect(yield* fileSystem.readFileString(NodePath.join(source, "app.ts"))).toBe(
+          "export const answer = 43;\n",
+        );
+        expect(yield* fileSystem.exists(NodePath.join(source, "later.ts"))).toBe(true);
+      }),
+    );
+
+    it.effect("falls back to the worktree's HEAD when turn 0 captured nothing", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const source = yield* makeTmpDir("checkpoint-restore-baseline-");
+        yield* initRepoWithCommit(source);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const forkPath = NodePath.join(yield* makeTmpDir("checkpoint-restore-head-"), "worktree");
+        yield* git(source, ["worktree", "add", "-b", "t3/fork-head", forkPath, "HEAD"]);
+        yield* writeTextFile(NodePath.join(forkPath, "scratch.ts"), "// left over\n");
+
+        expect(
+          yield* checkpointStore.restoreCheckpoint({
+            cwd: forkPath,
+            checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-no-baseline"), 0),
+            fallbackToHead: true,
+          }),
+        ).toBe(true);
+
+        expect(yield* fileSystem.exists(NodePath.join(forkPath, "scratch.ts"))).toBe(false);
+        expect(yield* fileSystem.exists(NodePath.join(forkPath, "README.md"))).toBe(true);
+      }),
+    );
+  });
 });

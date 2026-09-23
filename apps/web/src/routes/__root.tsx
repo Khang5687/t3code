@@ -1,6 +1,10 @@
-import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
+import {
+  type ServerLifecycleMovedPayload,
+  type ServerLifecycleWelcomePayload,
+} from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { claimServerMoveAnnouncement } from "@t3tools/client-runtime/state/server";
 import {
   Outlet,
   Link,
@@ -65,8 +69,10 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   primaryServerConfigAtom,
   primaryServerConfigEventAtom,
+  primaryServerMovedAtom,
   primaryServerWelcomeAtom,
 } from "../state/server";
+import { primaryEnvironmentMovedUrl } from "../environments/primary/target";
 import { readProject, setActiveEnvironmentId, useActiveEnvironmentId } from "../state/entities";
 import {
   createKeybindingsUpdateToastController,
@@ -482,6 +488,7 @@ function EventRouter({
   const serverConfig = useAtomValue(primaryServerConfigAtom);
   const serverConfigEvent = useAtomValue(primaryServerConfigEventAtom);
   const serverWelcome = useAtomValue(primaryServerWelcomeAtom);
+  const serverMoved = useAtomValue(primaryServerMovedAtom);
   const readPathname = useEffectEvent(() => pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const skipInitialBootstrapNavigationRef = useRef(skipInitialBootstrapNavigation);
@@ -534,6 +541,32 @@ function EventRouter({
       });
       handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
     })().catch(() => undefined);
+  });
+
+  const handleServerMoved = useEffectEvent((moved: ServerLifecycleMovedPayload | null) => {
+    const port = claimServerMoveAnnouncement(moved);
+    if (port === null) {
+      return;
+    }
+    const movedUrl = primaryEnvironmentMovedUrl(port);
+    toastManager.add(
+      stackedThreadToast({
+        type: "info",
+        title: `The server moved to :${port}`,
+        ...(movedUrl === null
+          ? {}
+          : {
+              description: "This page is still served from the old port.",
+              actionVariant: "outline",
+              actionProps: {
+                children: `Reconnect to :${port}`,
+                // Dismissing leaves the client where it is, still retrying: the
+                // action is the way back, not a redirect the user never chose.
+                onClick: () => window.location.assign(movedUrl),
+              },
+            }),
+      }),
+    );
   });
 
   const handleServerConfigUpdated = useEffectEvent(() => {
@@ -606,6 +639,12 @@ function EventRouter({
   useEffect(() => {
     handleWelcome(serverWelcome);
   }, [serverWelcome]);
+
+  // Keyed on the value: the server publishes a move once and never replays it,
+  // so a new value here is a move this client has not announced yet.
+  useEffect(() => {
+    handleServerMoved(serverMoved);
+  }, [serverMoved]);
 
   useEffect(() => {
     if (serverConfigEvent === null || handledConfigEventRef.current === serverConfigEvent) {

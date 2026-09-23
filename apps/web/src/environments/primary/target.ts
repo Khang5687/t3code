@@ -303,6 +303,27 @@ export function resolvePrimaryEnvironmentHttpUrl(
   return url.toString();
 }
 
+/**
+ * Where this page has to go to follow a server that changed its port, or null
+ * when it cannot follow. Only the plain web app can: it is served by the server
+ * that moved, so the same URL on the new port is the same app. A desktop
+ * renderer takes its URL from the bootstrap envelope, and a build with a
+ * configured origin was pointed somewhere deliberately; neither is this
+ * function's to rewrite.
+ */
+export function primaryEnvironmentMovedUrl(port: number): string | null {
+  const primaryTarget = readPrimaryEnvironmentTarget();
+  if (primaryTarget?.source !== "window-origin") {
+    return null;
+  }
+  const url = new URL(window.location.href);
+  if (url.port === String(port)) {
+    return null;
+  }
+  url.port = String(port);
+  return url.toString();
+}
+
 // Null only when the desktop app runs with its local environment disabled;
 // every other host has a primary (falling back to the page origin).
 export function readPrimaryEnvironmentTarget(): PrimaryEnvironmentTarget | null {

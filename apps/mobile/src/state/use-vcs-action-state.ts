@@ -15,6 +15,8 @@ export interface GitActionResultNotification {
   readonly title: string;
   readonly description?: string;
   readonly prUrl?: string;
+  /** Tapping the banner runs this instead of only dismissing it. */
+  readonly onPress?: () => void;
 }
 
 const RESULT_DISMISS_MS = 5_000;
@@ -59,6 +61,7 @@ export interface GitActionProgress {
   readonly label: string | null;
   readonly description: string | null;
   readonly prUrl?: string;
+  readonly onPress?: () => void;
 }
 
 const EMPTY_PROGRESS: GitActionProgress = {
@@ -119,6 +122,7 @@ export function useGitActionProgress(target: VcsActionTarget): GitActionProgress
       label: result.title,
       description: result.description ?? null,
       prUrl: result.prUrl,
+      onPress: result.onPress,
     };
   }
 

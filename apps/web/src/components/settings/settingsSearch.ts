@@ -372,6 +372,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["queue steer running turn send default behavior composer"],
   },
   {
+    id: "after-fork",
+    title: "After forking",
+    to: "/settings/general",
+    searchTerms: ["fork branch open stay source thread navigate"],
+  },
+  {
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/general",

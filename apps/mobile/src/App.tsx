@@ -11,6 +11,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { ServerMovedNoticeHost } from "./features/connection/ServerMovedNoticeHost";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -91,6 +92,7 @@ function AppContent() {
               </IncomingShareProvider>
               <ConfirmDialogHost />
               <ThreadArrangementHost />
+              <ServerMovedNoticeHost />
             </View>
             {/* Anchored-menu overlays render here — in-window, so the
                 keyboard stays up while a dropdown is open. */}

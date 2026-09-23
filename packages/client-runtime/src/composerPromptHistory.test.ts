@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildPlanImplementationPrompt } from "../../proposedPlan";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  PLAN_IMPLEMENTATION_PROMPT_PREFIX,
   buildComposerPromptHistoryEntries,
   recallableComposerPrompt,
   stepComposerPromptHistory,
   type ComposerPromptHistoryPosition,
-} from "./composerPromptHistory";
+} from "./composerPromptHistory.ts";
 
 const entries = buildComposerPromptHistoryEntries([
   { id: "m1", role: "user", text: "first" },
@@ -95,7 +95,9 @@ describe("recallableComposerPrompt", () => {
   it("returns an empty string for app-composed sends", () => {
     expect(recallableComposerPrompt("   ")).toBe("");
     expect(recallableComposerPrompt(ATTACHMENT_ONLY_BOOTSTRAP_PROMPT)).toBe("");
-    expect(recallableComposerPrompt(buildPlanImplementationPrompt("# Plan\n1. do it"))).toBe("");
+    expect(recallableComposerPrompt(`${PLAN_IMPLEMENTATION_PROMPT_PREFIX}# Plan\n1. do it`)).toBe(
+      "",
+    );
   });
 });
 

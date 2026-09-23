@@ -17,6 +17,7 @@ import {
 } from "../questionAttachments";
 import { useAttachmentUploadStore } from "../lib/attachmentUploadQueue";
 import {
+  afterForkAction,
   type AssistantCitation,
   type ApprovalRequestId,
   type ChatFileAttachment,
@@ -39,6 +40,7 @@ import {
   type KeybindingCommand,
   OrchestrationThreadActivity,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  type ThreadForkLocation,
   ProviderInteractionMode,
   ProviderDriverKind,
   resolveEnvironmentMachineKind,
@@ -53,6 +55,7 @@ import {
 } from "@t3tools/client-runtime/errors";
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
+import { resolveForkSource, resolveForkTarget } from "@t3tools/client-runtime/thread-fork";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -240,7 +243,7 @@ import {
   PaperclipIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { cn, randomHex, randomUUID } from "~/lib/utils";
+import { cn, randomHex } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -352,6 +355,7 @@ import {
   useProjects,
   useThread,
   useThreadRefs,
+  useAllEnvironmentShellsBootstrapped,
   useThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
@@ -362,7 +366,7 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
-import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
+import { resolveTimelineIsAtEnd, worktreeSetupHandedOff } from "./chat/MessagesTimeline.logic";
 import { resolveComposerTimelineInset, resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
@@ -440,6 +444,7 @@ import {
   readFileAsDataUrl,
   resolveFileAttachmentUrl,
   prepareRevertedMessageAttachments,
+  buildRestoredComposerAttachments,
   waitForRevertedMessage,
   reconcileMountedTerminalThreadIds,
   recallCheckoutIsRepo,
@@ -450,7 +455,9 @@ import {
   getAntigravitySendBlockReason,
   resolveDraftHeroState,
   findRecordedWorktreeSetup,
+  isOwnUserMessage,
   resolveVisibleWorktreeSetup,
+  strandedForkSendBlockReason,
   restorePlanFollowUpComposer,
   isPaintOnlyThreadTimeline,
   peekHeldThreadTimeline,
@@ -468,8 +475,10 @@ import {
   startNewThreadForProject,
   codexArtifactTemplatePromptToAppend,
   toolGroupConsumesUpwardNavigation,
-  waitForStartedServerThread,
+  serverThreadExists,
+  waitForServerThread,
   shouldRefocusComposerOnWindowFocus,
+  threadErrorIsForkResumeFailure,
 } from "./ChatView.logic";
 import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -523,7 +532,7 @@ import { useAssetUrls } from "../assets/assetUrls";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   recallableComposerPrompt,
-} from "./chat/composerPromptHistory";
+} from "@t3tools/client-runtime/composer-prompt-history";
 
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_QUEUED_TURNS: ReadonlyArray<OrchestrationQueuedTurn> = [];
@@ -1451,6 +1460,7 @@ const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 const EMPTY_HELD_TURN_DIFF_SUMMARIES: readonly never[] = [];
 const noopHeldTurnDiff = (_turnId: TurnId, _filePath?: string) => {};
 const noopHeldRevert = (_targetTurnCount: number) => {};
+const noopHeldFork = (_messageId: MessageId) => {};
 const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
 
 /**
@@ -1503,6 +1513,7 @@ export default function ChatView(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const forkThread = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -2000,6 +2011,25 @@ export default function ChatView(props: ChatViewProps) {
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  // A fork's source, for the header's "Forked from" line. The origin record is
+  // display-only, so a source that is gone keeps the line without a link.
+  const forkSourceRef = useMemo(
+    () =>
+      activeServerThread?.forkedFrom
+        ? scopeThreadRef(activeServerThread.environmentId, activeServerThread.forkedFrom.threadId)
+        : null,
+    [activeServerThread?.environmentId, activeServerThread?.forkedFrom],
+  );
+  const forkSourceShell = useThreadShell(forkSourceRef);
+  const threadShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
+  const forkOrigin = activeServerThread?.forkedFrom;
+  const forkSource = useMemo(
+    () =>
+      forkSourceRef === null || !forkOrigin
+        ? null
+        : resolveForkSource(forkSourceRef, forkOrigin, forkSourceShell, threadShellsBootstrapped),
+    [forkSourceRef, forkOrigin, forkSourceShell, threadShellsBootstrapped],
+  );
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -2915,6 +2945,10 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const visibleThreadErrorIsForkResumeFailure = useMemo(
+    () => threadErrorIsForkResumeFailure(threadActivities, visibleThreadError),
+    [threadActivities, visibleThreadError],
+  );
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
   const workspaceMutationId = useMemo(() => {
     const activityId = latestWorkspaceMutationId(threadActivities);
@@ -3262,7 +3296,9 @@ export default function ChatView(props: ChatViewProps) {
     activeServerThread !== null &&
     activeServerThread.id === routeThreadRef.threadId &&
     activeServerThread.latestTurn === null &&
-    recordedWorktreeSetup?.phase === "running";
+    recordedWorktreeSetup?.phase === "running" &&
+    // A fork records its handoff; its setup script may run on beside it.
+    !worktreeSetupHandedOff(recordedWorktreeSetup);
   const isWorking =
     phase === "running" ||
     isSendBusy ||
@@ -3570,7 +3606,8 @@ export default function ChatView(props: ChatViewProps) {
   // held only while a snapshot can still change.
   const routeThreadPreparesWorktree =
     (isPreparingWorktree && activeThread?.id === routeThreadRef.threadId) ||
-    heldWorktreeSetup?.phase === "running";
+    heldWorktreeSetup?.phase === "running" ||
+    recordedWorktreeSetup?.phase === "running";
   const worktreeSetupQuery = useEnvironmentQuery(
     routeThreadPreparesWorktree
       ? vcsEnvironment.worktreeSetup({
@@ -3594,7 +3631,7 @@ export default function ChatView(props: ChatViewProps) {
     turnStarted: activeThread?.latestTurn?.startedAt != null,
     // Counts the optimistic send too, so the row retires the moment the
     // follow-up is on screen rather than when the server echoes it back.
-    followUpSent: timelineMessages.filter((message) => message.role === "user").length > 1,
+    followUpSent: timelineMessages.filter(isOwnUserMessage).length > 1,
   });
   // Sends wait for the agent handoff, not for the setup script: an async
   // script keeps the snapshot running while the agent already works, and a
@@ -3602,10 +3639,11 @@ export default function ChatView(props: ChatViewProps) {
   // snapshot arrives the starting session stands in for it.
   const worktreeSetupBlocksSend =
     worktreeSetup !== null
-      ? worktreeSetup.phase === "running" && !worktreeSetupAgentStarted(worktreeSetup)
+      ? worktreeSetup.phase === "running" && !worktreeSetupHandedOff(worktreeSetup)
       : isServerThread &&
         activeThreadShell?.session?.status === "starting" &&
         activeThreadShell.latestTurn === null;
+  const strandedForkReason = strandedForkSendBlockReason(worktreeSetup, activeServerThread);
   const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup, {
     reportFailure: false,
   });
@@ -3760,6 +3798,11 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  // The same answer without the optimistic default. Chrome that can correct
+  // itself may guess; an action the server would reject may not, so anything
+  // gating an offer reads this one.
+  const isKnownGitRepo =
+    liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? false;
   // Keep a hidden, off-flow strip mounted for existing threads so the composer
   // can measure whether its relocated controls fit. The visible chrome remains
   // content-driven: Git/environment context or controls that actually fit.
@@ -7068,24 +7111,9 @@ export default function ChatView(props: ChatViewProps) {
               ? `${currentPrompt}\n\n${restoredPrompt}`
               : restoredPrompt;
         store.setPrompt(composerDraftTarget, nextPrompt);
-        const images: ComposerImageAttachment[] = [];
-        const restoredFiles: ComposerFileAttachment[] = [];
-        files.forEach((file, index) => {
-          const attachment = {
-            id: randomUUID(),
-            name: file.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
-            file,
-          };
-          if (message.attachments?.[index]?.type === "image") {
-            images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
-          } else {
-            restoredFiles.push({ ...attachment, type: "file" });
-          }
-        });
-        store.addImages(composerDraftTarget, images, { allowDuplicates: true });
-        store.addFiles(composerDraftTarget, restoredFiles, { allowDuplicates: true });
+        const restored = buildRestoredComposerAttachments(files, message);
+        store.addImages(composerDraftTarget, restored.images, { allowDuplicates: true });
+        store.addFiles(composerDraftTarget, restored.files, { allowDuplicates: true });
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = nextPrompt;
           composerRef.current?.resetCursorState({ prompt: nextPrompt, cursor: nextPrompt.length });
@@ -7124,6 +7152,135 @@ export default function ChatView(props: ChatViewProps) {
       routeThreadRef,
       setThreadError,
       supportsConversationRollback,
+    ],
+  );
+
+  const afterFork = useClientSettings((settings) => settings.afterFork);
+
+  // Which message the fork dialog is asking about, and whether it may offer a
+  // worktree. `busy` keeps the dialog up until the server accepts the fork; a
+  // new-worktree fork's checkout then reports progress on the fork itself.
+  const [pendingFork, setPendingFork] = useState<{
+    messageId: MessageId;
+    canForkIntoNewWorktree: boolean;
+    routeThreadKey: string;
+    busy: boolean;
+  } | null>(null);
+
+  if (pendingFork && pendingFork.routeThreadKey !== routeThreadKey) {
+    setPendingFork(null);
+  }
+
+  const onForkFromMessage = useCallback(
+    (messageId: MessageId) => {
+      if (!activeThread) return;
+      const target = resolveForkTarget({
+        messages: activeThread.messages,
+        checkpoints: activeThread.checkpoints,
+        messageId,
+        isGitProject: isKnownGitRepo,
+      });
+      if (!target) return;
+      setPendingFork({ ...target, routeThreadKey, busy: false });
+    },
+    [activeThread, isKnownGitRepo, routeThreadKey],
+  );
+
+  /**
+   * Branches the thread at `messageId`, leaving the message waiting in the
+   * fork's composer. The `afterFork` setting decides whether this lands in the
+   * fork or stays here with a toast that opens it. The source is never touched,
+   * so this stays available while its agent runs.
+   *
+   * Attachments are re-materialised before the fork exists: a fetch that fails
+   * then leaves no thread to clean up. A failure to open the fork after the
+   * command lands deletes it; a new-worktree fork whose checkout later fails
+   * keeps its thread and shows the failure on its setup card.
+   */
+  const forkFromMessage = useCallback(
+    async (messageId: MessageId, location: ThreadForkLocation) => {
+      if (!activeThread) return;
+      const sourceThreadId = activeThread.id;
+      const message = activeThread.messages.find((candidate) => candidate.id === messageId);
+      if (!message || message.role !== "user") return;
+      setPendingFork((existing) => (existing ? { ...existing, busy: true } : existing));
+      setThreadError(sourceThreadId, null);
+
+      const forkThreadId = newThreadId();
+      let forked = false;
+      try {
+        const connection = readPreparedConnection(environmentId);
+        if (!connection) throw new Error("The environment is not connected.");
+        const files = await prepareRevertedMessageAttachments({
+          message,
+          environmentId,
+          httpBaseUrl: connection.httpBaseUrl,
+          createAssetUrl: createAttachmentAssetUrl,
+        });
+        if (files.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+          throw new Error("This message has more attachments than a turn can carry.");
+        }
+
+        const result = await forkThread({
+          environmentId,
+          input: { threadId: forkThreadId, sourceThreadId, messageId, location },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        forked = true;
+
+        const forkRef = scopeThreadRef(environmentId, forkThreadId);
+        await waitForServerThread(forkRef, 1_000, serverThreadExists);
+        const store = useComposerDraftStore.getState();
+        store.setPrompt(forkRef, recallableComposerPrompt(message.text));
+        const restored = buildRestoredComposerAttachments(files, message);
+        store.addImages(forkRef, restored.images, { allowDuplicates: true });
+        store.addFiles(forkRef, restored.files, { allowDuplicates: true });
+
+        // The toast is the only way into the fork on this path, so it stays up
+        // until dismissed and outlives scrolling or a move to another thread.
+        const openFork = () =>
+          navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(forkRef) });
+        if (afterForkAction(afterFork) === "navigate") {
+          await openFork();
+        } else {
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: "Forked this thread",
+              description: "The message is waiting in the fork's composer.",
+              timeout: 0,
+              actionProps: { children: "Open", onClick: () => void openFork() },
+            }),
+          );
+        }
+        setPendingFork(null);
+      } catch (error) {
+        if (forked) {
+          const cleanup = await deleteThread({
+            environmentId,
+            input: { threadId: forkThreadId },
+          });
+          if (cleanup._tag === "Failure" && !isAtomCommandInterrupted(cleanup)) {
+            console.warn("Failed to clean up a fork that could not be opened.", cleanup);
+          }
+        }
+        // Close the dialog so the thread's error banner is the thing in view.
+        setPendingFork(null);
+        setThreadError(
+          sourceThreadId,
+          error instanceof Error ? error.message : "Failed to fork this thread.",
+        );
+      }
+    },
+    [
+      activeThread,
+      afterFork,
+      createAttachmentAssetUrl,
+      deleteThread,
+      environmentId,
+      forkThread,
+      navigate,
+      setThreadError,
     ],
   );
 
@@ -9099,7 +9256,7 @@ export default function ChatView(props: ChatViewProps) {
 
     if (failure === null) {
       const startedResult = await settlePromise(() =>
-        waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, nextThreadId)),
+        waitForServerThread(scopeThreadRef(activeThread.environmentId, nextThreadId)),
       );
       failure = startedResult._tag === "Failure" ? startedResult : null;
     }
@@ -9391,6 +9548,11 @@ export default function ChatView(props: ChatViewProps) {
   onRevertToTurnCountRef.current = onRevertToTurnCount;
   const onRevertTimelineTurn = useCallback((targetTurnCount: number, messageId: MessageId) => {
     void onRevertToTurnCountRef.current(targetTurnCount, messageId);
+  }, []);
+  const onForkFromMessageRef = useRef(onForkFromMessage);
+  onForkFromMessageRef.current = onForkFromMessage;
+  const onForkTimelineMessage = useCallback((messageId: MessageId) => {
+    onForkFromMessageRef.current(messageId);
   }, []);
 
   // Files dropped on a sidebar row land here once the dropped-on thread is
@@ -9716,6 +9878,7 @@ export default function ChatView(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
+            forkSource={forkSource}
             isServerThread={isServerThread}
             activeProject={activeProject}
             openInCwd={gitCwd}
@@ -9772,6 +9935,7 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ThreadErrorBanner
                 error={visibleThreadError}
+                variant={visibleThreadErrorIsForkResumeFailure ? "warning" : "error"}
                 onDismiss={() => {
                   setThreadError(activeThread.id, null);
                   dismissThreadErrorBannerForSession(threadErrorBannerKey);
@@ -9821,6 +9985,9 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 onRevertToTurnCount={
                   paintOnlyDisplayedTimeline ? noopHeldRevert : onRevertTimelineTurn
+                }
+                onForkFromMessage={
+                  paintOnlyDisplayedTimeline ? noopHeldFork : onForkTimelineMessage
                 }
                 isRevertingCheckpoint={!paintOnlyDisplayedTimeline && isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
@@ -9981,7 +10148,7 @@ export default function ChatView(props: ChatViewProps) {
                                     ? "Messages loading"
                                     : worktreeSetupBlocksSend
                                       ? "Preparing worktree"
-                                      : projectCloneSendBlockReason
+                                      : (strandedForkReason ?? projectCloneSendBlockReason)
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             bannerItems={composerBannerItems}
@@ -10364,6 +10531,51 @@ export default function ChatView(props: ChatViewProps) {
             >
               Revert and keep changes
             </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      <AlertDialog
+        open={pendingFork !== null && pendingFork.routeThreadKey === routeThreadKey}
+        onOpenChange={(open) => {
+          if (!open && pendingFork?.busy !== true) setPendingFork(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Fork from here?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Start a new thread with the history before this message. Your prompt and attachments
+              go to the new thread&apos;s composer. This thread keeps everything it has.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={pendingFork?.busy === true}
+              render={<Button variant="outline" />}
+            >
+              Cancel
+            </AlertDialogClose>
+            {pendingFork?.canForkIntoNewWorktree ? (
+              <Button
+                variant="outline"
+                disabled={pendingFork.busy}
+                onClick={() => {
+                  void forkFromMessage(pendingFork.messageId, "new-worktree");
+                }}
+              >
+                Fork into new worktree
+              </Button>
+            ) : null}
+            {pendingFork ? (
+              <Button
+                disabled={pendingFork.busy}
+                onClick={() => {
+                  void forkFromMessage(pendingFork.messageId, "same-workspace");
+                }}
+              >
+                Fork in same workspace
+              </Button>
+            ) : null}
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>

@@ -19,7 +19,6 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
-  ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -32,7 +31,10 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderAdapterStartSessionInput,
+} from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -44,7 +46,7 @@ export interface ProviderServiceShape {
    */
   readonly startSession: (
     threadId: ThreadId,
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterStartSessionInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**
@@ -112,6 +114,17 @@ export interface ProviderServiceShape {
   readonly assertConversationRollbackSupported: (
     threadId: ThreadId,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * The provider-native resume handle persisted for a thread, or `undefined`
+   * when that thread never bound a session. Reads the session directory
+   * without routing, recovering or starting anything, so the owning thread is
+   * left exactly as it was. Used to start one thread's session from another
+   * thread's conversation (a fork).
+   */
+  readonly getPersistedResumeCursor: (
+    threadId: ThreadId,
+  ) => Effect.Effect<unknown, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

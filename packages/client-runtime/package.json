@@ -39,6 +39,18 @@
       "types": "./src/markdownLinks.ts",
       "default": "./src/markdownLinks.ts"
     },
+    "./composer-prompt-history": {
+      "types": "./src/composerPromptHistory.ts",
+      "default": "./src/composerPromptHistory.ts"
+    },
+    "./thread-fork": {
+      "types": "./src/threadFork.ts",
+      "default": "./src/threadFork.ts"
+    },
+    "./timeline-debug-ref": {
+      "types": "./src/timelineDebugRef.ts",
+      "default": "./src/timelineDebugRef.ts"
+    },
     "./media-reference": {
       "types": "./src/mediaReference.ts",
       "default": "./src/mediaReference.ts"

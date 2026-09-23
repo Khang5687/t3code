@@ -131,7 +131,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                     : "Searching workspace files..."
                 : (props.emptyStateText ??
                   (props.triggerKind === "skill"
-                    ? "No skills found. Try / to browse provider commands."
+                    ? "No skills found. Start a message with / to browse provider commands."
                     : props.triggerKind === "path"
                       ? "No matching files or folders."
                       : "No matching command."))}

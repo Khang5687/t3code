@@ -23,6 +23,9 @@ export function GitActionProgressOverlay(props: {
   readonly onDismiss: () => void;
 }) {
   const { progress, onDismiss } = props;
+  // `progress` is a fresh object every render, so the handler depends on the
+  // fields it reads rather than the whole thing.
+  const { onPress, phase, prUrl } = progress;
   const insets = useSafeAreaInsets();
   const prevPhaseRef = useRef(progress.phase);
 
@@ -38,14 +41,19 @@ export function GitActionProgressOverlay(props: {
   }, [progress.phase]);
 
   const handlePress = useCallback(() => {
-    if (progress.prUrl) {
-      void tryOpenExternalUrl(progress.prUrl, "pull-request");
+    if (onPress) {
+      onDismiss();
+      onPress();
       return;
     }
-    if (progress.phase === "success" || progress.phase === "error") {
+    if (prUrl) {
+      void tryOpenExternalUrl(prUrl, "pull-request");
+      return;
+    }
+    if (phase === "success" || phase === "error") {
       onDismiss();
     }
-  }, [onDismiss, progress.phase, progress.prUrl]);
+  }, [onDismiss, onPress, phase, prUrl]);
 
   if (progress.phase === "idle") {
     return null;
@@ -92,7 +100,7 @@ function OverlayContent(props: { readonly progress: GitActionProgress }) {
         ) : null}
       </View>
 
-      {progress.prUrl ? (
+      {progress.prUrl || progress.onPress ? (
         <SymbolView
           name="arrow.up.right"
           size={13}

@@ -3,9 +3,10 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
- * Live progress for a thread whose first turn is creating a worktree. The
- * server keeps this in memory only; a client that reconnects mid-setup gets a
- * fresh snapshot, and a finished setup is dropped once its turn starts.
+ * Live progress for a thread whose first turn is creating a worktree, or for a
+ * fork checking out its own. The server keeps this in memory only; a client
+ * that reconnects mid-setup gets a fresh snapshot, and a finished setup is
+ * dropped shortly after it settles.
  */
 /** Producers clamp free text to these before publishing so encoding never fails. */
 export const WORKTREE_SETUP_DETAIL_MAX_LENGTH = 200;
@@ -16,6 +17,7 @@ export const WorktreeSetupStageId = Schema.Literals([
   "fetch",
   "checkout",
   "submodules",
+  "restore",
   "setup-script",
   "agent",
 ]);
@@ -72,10 +74,10 @@ export const WorktreeSetupSnapshot = Schema.Struct({
 export type WorktreeSetupSnapshot = typeof WorktreeSetupSnapshot.Type;
 
 /**
- * Thread activity that carries a `WorktreeSetupSnapshot` as its payload. The
- * bootstrap writes it under a fixed id once the thread exists (phase running)
- * and again when the setup settles, so the projection always holds the
- * latest known state: a client attaches the live stream while it says
+ * Thread activity that carries a `WorktreeSetupSnapshot` as its payload. A
+ * worktree bootstrap or a new-worktree fork writes it under a fixed id once
+ * the thread exists (phase running) and again when the setup settles, so the
+ * projection always holds the latest known state: a client attaches the live stream while it says
  * running and renders the outcome from it afterwards, on any device or
  * after a reload.
  */
@@ -105,6 +107,7 @@ export const WORKTREE_SETUP_STAGE_ORDER: ReadonlyArray<WorktreeSetupStageId> = [
   "fetch",
   "checkout",
   "submodules",
+  "restore",
   "setup-script",
   "agent",
 ];
@@ -117,9 +120,27 @@ export function worktreeSetupStageLabel(id: WorktreeSetupStageId): string {
       return "Check out files";
     case "submodules":
       return "Init submodules";
+    case "restore":
+      return "Restore checkpoint";
     case "setup-script":
       return "Run setup script";
     case "agent":
       return "Start agent";
   }
+}
+
+/**
+ * Whether the thread may run while its setup is still reported as running. A
+ * bootstrap hands off once its agent stage is done. A fork has no agent stage:
+ * it hands off once its files are in place and the setup script has started,
+ * which may keep running beside the thread.
+ */
+export function worktreeSetupHandedOff(snapshot: WorktreeSetupSnapshot): boolean {
+  if (snapshot.stages.some((stage) => stage.id === "agent")) {
+    return snapshot.stages.some((stage) => stage.id === "agent" && stage.status === "done");
+  }
+  return snapshot.stages.every(
+    (stage) =>
+      stage.status !== "pending" && (stage.status !== "running" || stage.id === "setup-script"),
+  );
 }

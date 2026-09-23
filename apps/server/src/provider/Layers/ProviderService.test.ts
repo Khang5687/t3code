@@ -2742,6 +2742,27 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("keeps a fork request past the wire schema so the adapter never resumes it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      routing.codex.startSession.mockClear();
+
+      yield* provider.startSession(asThreadId("thread-fork"), {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-fork"),
+        cwd: fixtureCwd("project-fork"),
+        resumeCursor: { threadId: "source-native-thread" },
+        forkResumeCursor: true,
+        runtimeMode: "full-access",
+      });
+
+      const startInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.propertyVal(startInput, "forkResumeCursor", true);
+      assert.deepEqual(startInput?.resumeCursor, { threadId: "source-native-thread" });
+    }),
+  );
+
   it.effect("dies when an active session conflicts with its persisted binding", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

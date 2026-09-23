@@ -4,6 +4,7 @@ import {
   CheckpointRef,
   EnvironmentId,
   EventId,
+  FORK_HISTORY_MESSAGE_PREFIX,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -30,6 +31,8 @@ import {
   resolveWorkGroupScrollIndex,
   shouldFollowWorkGroupAppend,
   shouldPreserveAssistantLineBreaks,
+  timelineRowRecordRef,
+  workEntryRecordRef,
   type MessagesTimelineRow,
   type MessagesTimelineRowsProjection,
   WORKTREE_SETUP_ROW_ID,
@@ -1122,6 +1125,48 @@ describe("deriveMessagesTimelineRows", () => {
       { id: "queued-message:q1", isNext: true, queuedTurn: { text: "first" } },
       { id: "queued-message:q2", isNext: false, queuedTurn: { text: "second" } },
     ]);
+  });
+
+  it("puts a fork's setup card after its copied history, not inside it", () => {
+    const copied = (id: string, role: "user" | "assistant", at: string) =>
+      ({
+        id: `entry-${id}`,
+        kind: "message",
+        createdAt: at,
+        message: {
+          id: MessageId.make(id),
+          role,
+          text: id,
+          turnId: null,
+          createdAt: at,
+          updatedAt: at,
+          streaming: false,
+        },
+      }) as const;
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        copied(`${FORK_HISTORY_MESSAGE_PREFIX}c:0`, "user", "2026-01-01T00:00:00Z"),
+        copied(`${FORK_HISTORY_MESSAGE_PREFIX}c:1`, "assistant", "2026-01-01T00:00:10Z"),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      worktreeSetup: {
+        threadId: ThreadId.make("thread-fork"),
+        phase: "failed",
+        startedAt: "2026-01-01T00:01:00Z",
+        endedAt: "2026-01-01T00:01:05Z",
+        branch: "t3/fork",
+        baseRef: "main",
+        worktreePath: null,
+        setupScript: null,
+        stages: [],
+        error: "No filesystem checkpoint is available for turn 1.",
+        sequence: 4,
+      },
+    });
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message", "worktree-setup"]);
   });
 
   it("leads the worktree setup card with the working header", () => {
@@ -3885,5 +3930,80 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("timelineRowRecordRef", () => {
+  const recordTurnId = TurnId.make("turn-1");
+  const settledMessage: ChatMessage = {
+    id: MessageId.make("msg-1"),
+    role: "assistant",
+    text: "Done",
+    turnId: recordTurnId,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:01.000Z",
+    streaming: false,
+  };
+
+  it("exposes the persisted message id and turn for a settled message row", () => {
+    expect(
+      timelineRowRecordRef({
+        kind: "message",
+        id: settledMessage.id,
+        createdAt: settledMessage.createdAt,
+        message: settledMessage,
+        durationStart: settledMessage.createdAt,
+        showAssistantMeta: true,
+        showAssistantCopyButton: true,
+        assistantCopyStreaming: false,
+      }),
+    ).toEqual({ recordId: "msg-1", turnId: recordTurnId });
+  });
+
+  it("exposes nothing while the message is still streaming", () => {
+    expect(
+      timelineRowRecordRef({
+        kind: "message",
+        id: settledMessage.id,
+        createdAt: settledMessage.createdAt,
+        message: { ...settledMessage, streaming: true },
+        durationStart: settledMessage.createdAt,
+        showAssistantMeta: false,
+        showAssistantCopyButton: false,
+        assistantCopyStreaming: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("exposes nothing for placeholder or group-summary rows", () => {
+    expect(timelineRowRecordRef({ kind: "working", id: "working", createdAt: null })).toBeNull();
+    expect(
+      timelineRowRecordRef({
+        kind: "work-toggle",
+        id: "work-toggle:entry-1",
+        createdAt: settledMessage.createdAt,
+        turnId: recordTurnId,
+        groupId: "work-group:entry-1",
+        hiddenCount: 3,
+        expanded: false,
+        summary: "Ran 3 commands",
+        summaryKind: "mixed",
+        hasFailure: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("points a work entry at its own persisted id and turn", () => {
+    expect(workEntryRecordRef({ id: "work-1", turnId: recordTurnId })).toEqual({
+      recordId: "work-1",
+      turnId: recordTurnId,
+    });
+  });
+
+  it("reads a work entry with no turn as thread-level", () => {
+    expect(workEntryRecordRef({ id: "work-2", turnId: null })).toEqual({
+      recordId: "work-2",
+      turnId: null,
+    });
   });
 });

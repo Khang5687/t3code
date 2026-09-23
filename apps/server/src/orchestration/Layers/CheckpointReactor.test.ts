@@ -138,6 +138,7 @@ function createProviderServiceHarness(
           continuationKey: `${providerName}:instance:${instanceId}`,
         },
       }),
+    getPersistedResumeCursor: () => unsupported(),
     rollbackConversation,
     uploadFeedback: () => unsupported(),
     get streamEvents() {

@@ -122,6 +122,9 @@ export function applyThreadDetailEvent(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          // Absent on ordinary threads, matching the server projector, so the
+          // live-event path and a snapshot refresh agree.
+          ...(event.payload.forkedFrom != null ? { forkedFrom: event.payload.forkedFrom } : {}),
           branchPullRequest: null,
           latestTurn: null,
           createdAt: event.payload.createdAt,
@@ -278,6 +281,9 @@ export function applyThreadDetailEvent(
             : {}),
           ...(event.payload.activeOrderKey !== undefined
             ? { activeOrderKey: event.payload.activeOrderKey }
+            : {}),
+          ...(event.payload.forkedFrom !== undefined
+            ? { forkedFrom: event.payload.forkedFrom }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

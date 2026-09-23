@@ -1,5 +1,5 @@
-import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
-export { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { isOwnUserMessage, worktreeSetupHandedOff } from "@t3tools/client-runtime/worktree-setup";
+export { worktreeSetupHandedOff } from "@t3tools/client-runtime/worktree-setup";
 import * as Equal from "effect/Equal";
 import { shallow } from "zustand/vanilla/shallow";
 import { renderCodexDirectivesForCopy } from "@t3tools/client-runtime/codex-markdown-directives";
@@ -443,6 +443,42 @@ export type MessagesTimelineRow =
       /** A turn is running, so sending this row now steers it instead of starting one. */
       isSteer: boolean;
     };
+
+/** A persisted record a timeline row points at, for copy-ID and debug refs. */
+export interface TimelineRowRecordRef {
+  recordId: string;
+  turnId: TurnId | null;
+}
+
+/**
+ * Work rows render one focusable line per work-log entry rather than one per
+ * row, so the entry — not the row — is what a copied ID points at.
+ */
+export function workEntryRecordRef(
+  entry: Pick<WorkLogEntry, "id" | "turnId">,
+): TimelineRowRecordRef {
+  return { recordId: entry.id, turnId: entry.turnId ?? null };
+}
+
+/**
+ * The persisted record behind a timeline row, or null when the row has
+ * nothing stable to point at: it is still streaming, it is a client-only
+ * placeholder (working, thinking, worktree setup, queued messages, live
+ * activity), or it is a group summary standing for several entries —
+ * expanding one of those reveals the per-entry rows that do carry a ref.
+ * Work rows go through `workEntryRecordRef` instead, per entry.
+ */
+export function timelineRowRecordRef(row: MessagesTimelineRow): TimelineRowRecordRef | null {
+  switch (row.kind) {
+    case "message":
+    case "assistant-meta":
+      return row.message.streaming
+        ? null
+        : { recordId: row.message.id, turnId: row.message.turnId };
+    default:
+      return null;
+  }
+}
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -1405,7 +1441,7 @@ export function deriveMessagesTimelineRows(input: {
   const setupHandedOff =
     input.worktreeSetup !== null &&
     input.worktreeSetup !== undefined &&
-    worktreeSetupAgentStarted(input.worktreeSetup) &&
+    worktreeSetupHandedOff(input.worktreeSetup) &&
     input.latestTurn?.startedAt != null;
   const setupRunning = !setupHandedOff && input.worktreeSetup?.phase === "running";
   if (input.worktreeSetup && (!setupHandedOff || input.worktreeSetup.phase !== "running")) {
@@ -1416,8 +1452,9 @@ export function deriveMessagesTimelineRows(input: {
       snapshot: input.worktreeSetup,
       embedded: setupHandedOff,
     } as const;
+    // A fork's copied history predates its setup; its card goes at the end.
     const firstUserRowIndex = nextRows.findIndex(
-      (row) => row.kind === "message" && row.message.role === "user",
+      (row) => row.kind === "message" && isOwnUserMessage(row.message),
     );
     // While the setup runs, the working header leads the card in the same
     // slot it keeps once the agent's own turn takes over. The main pass may

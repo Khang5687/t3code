@@ -2,7 +2,7 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { listenInterfacesForPreset } from "@t3tools/contracts";
+import { listenInterfacesForPreset, type ListenInterfaces } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -12,11 +12,40 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
+import * as DesktopListenRebind from "./DesktopListenRebind.ts";
 import * as DesktopNetworkInterfaces from "./DesktopNetworkInterfaces.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
 const encoder = new TextEncoder();
+
+const boundResult = {
+  addresses: ["127.0.0.1"],
+  port: 4173,
+  warnings: [],
+  tailscaleServeRepointed: false,
+};
+
+const acceptingRebindLayer = Layer.succeed(DesktopListenRebind.DesktopListenRebind, {
+  rebind: () => Effect.succeed(boundResult),
+} satisfies DesktopListenRebind.DesktopListenRebind["Service"]);
+
+/** Records every selection the backend was asked to bind, and accepts each one. */
+function recordingRebindLayer() {
+  const requested: ListenInterfaces[] = [];
+  const layer = Layer.succeed(DesktopListenRebind.DesktopListenRebind, {
+    rebind: ({ listenInterfaces }) => {
+      requested.push(listenInterfaces);
+      return Effect.succeed(boundResult);
+    },
+  } satisfies DesktopListenRebind.DesktopListenRebind["Service"]);
+  return { requested, layer };
+}
+
+const refusingRebindLayer = (reason: string) =>
+  Layer.succeed(DesktopListenRebind.DesktopListenRebind, {
+    rebind: () => Effect.fail(new DesktopListenRebind.DesktopListenRebindFailedError({ reason })),
+  } satisfies DesktopListenRebind.DesktopListenRebind["Service"]);
 
 const emptyNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces = {};
 const lanNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces = {
@@ -101,6 +130,9 @@ function makeLayer(input: {
   });
 
   return DesktopServerExposure.layer.pipe(
+    // The default backend accepts every move; tests that care override it at
+    // the call site with `Effect.provide`.
+    Layer.merge(acceptingRebindLayer),
     Layer.provideMerge(input.desktopSettingsLayer ?? DesktopAppSettings.layer),
     Layer.provideMerge(NodeFileSystem.layer),
     Layer.provideMerge(NodeHttpClient.layerUndici),
@@ -121,6 +153,7 @@ const withHarness = <A, E, R>(
     | FileSystem.FileSystem
     | DesktopServerExposure.DesktopServerExposure
     | DesktopAppSettings.DesktopAppSettings
+    | DesktopListenRebind.DesktopListenRebind
   >,
   env: Record<string, string | undefined> = {},
   spawnerLayer?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
@@ -193,7 +226,7 @@ describe("DesktopServerExposure", () => {
         yield* serverExposure.configureFromSettings({ port: 4173 });
 
         const change = yield* serverExposure.setMode("network-accessible");
-        assert.equal(change.requiresRelaunch, true);
+        assert.equal(change.requiresRelaunch, false);
         assert.deepEqual(change.state, {
           mode: "network-accessible",
           listenInterfaces: { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
@@ -505,17 +538,23 @@ describe("DesktopServerExposure", () => {
     ),
   );
 
-  it.effect("requires a relaunch only when the selection changes as a set", () =>
-    withHarness(
+  it.effect("rebinds the running backend instead of relaunching, on every listen change", () => {
+    const rebind = recordingRebindLayer();
+    return withHarness(
       lanNetworkInterfaces,
       Effect.gen(function* () {
         const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        // Port and interface set are two dimensions of one diff, and the port
+        // has no setter of its own, so the port arm shows up as a move between
+        // configures that the next change carries without a relaunch.
+        yield* serverExposure.configureFromSettings({ port: 4100 });
         yield* serverExposure.configureFromSettings({ port: 4173 });
 
         const widened = yield* serverExposure.setListenInterfaces({
           kinds: ["loopback", "tailnet", "lan"],
         });
-        assert.equal(widened.requiresRelaunch, true);
+        assert.equal(widened.requiresRelaunch, false);
+        assert.equal(widened.state.endpointUrl, "http://192.168.1.20:4173");
 
         // Same set, different order and a duplicate: nothing to rebind.
         const reordered = yield* serverExposure.setListenInterfaces({
@@ -524,9 +563,46 @@ describe("DesktopServerExposure", () => {
         assert.equal(reordered.requiresRelaunch, false);
 
         const narrowed = yield* serverExposure.setListenInterfaces({ kinds: ["loopback", "lan"] });
-        assert.equal(narrowed.requiresRelaunch, true);
+        assert.equal(narrowed.requiresRelaunch, false);
         assert.equal(narrowed.state.preset, "custom");
         assert.equal(narrowed.state.mode, "network-accessible");
+
+        // Only the two real moves reached the backend; the reorder did not.
+        assert.deepEqual(rebind.requested, [
+          { kinds: ["loopback", "tailnet", "lan"], addresses: [] },
+          { kinds: ["loopback", "lan"], addresses: [] },
+        ]);
+      }).pipe(Effect.provide(rebind.layer)),
+    );
+  });
+
+  it.effect("keeps the old selection when the backend refuses the new one", () =>
+    withHarness(
+      lanNetworkInterfaces,
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* settings.load;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+
+        const error = yield* serverExposure
+          .setListenInterfaces({ kinds: ["loopback", "lan"] })
+          .pipe(
+            Effect.provide(refusingRebindLayer("Could not bind 192.168.1.20:4173 (EADDRINUSE).")),
+            Effect.flip,
+          );
+        assert.instanceOf(error, DesktopListenRebind.DesktopListenRebindFailedError);
+        assert.equal(error.message, "Could not bind 192.168.1.20:4173 (EADDRINUSE).");
+
+        // Nothing was written, and the panel still reads back the bound set.
+        assert.deepEqual(
+          (yield* settings.get).listenInterfaces,
+          DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.listenInterfaces,
+        );
+        assert.deepEqual((yield* serverExposure.getState).listenInterfaces, {
+          kinds: ["loopback"],
+          addresses: [],
+        });
       }),
     ),
   );

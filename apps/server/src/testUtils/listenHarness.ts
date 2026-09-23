@@ -4,10 +4,11 @@
 // probe the bound socket over raw TCP and read the auth policy from the
 // public `/api/auth/session` descriptor, the same route clients use.
 //
-// Only the `auth` group is served. `HttpApiBuilder.layer` demands a handler
-// for every group on the api it is given, so a trimmed `HttpApi` carrying
-// just `EnvironmentHttpApi.groups.auth` lets the production `authHttpApiLayer`
-// mount unchanged (group services key on api id + group id, both preserved).
+// Only the `auth` and `listen` groups are served. `HttpApiBuilder.layer`
+// demands a handler for every group on the api it is given, so a trimmed
+// `HttpApi` carrying just those two lets the production `authHttpApiLayer` and
+// `listenHttpApiLayer` mount unchanged (group services key on api id + group
+// id, both preserved).
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, EnvironmentId } from "@t3tools/contracts";
 import type { ServerAuthPolicy } from "@t3tools/contracts";
@@ -33,7 +34,10 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ListenAddress from "../listenAddress.ts";
+import { listenHttpApiLayer } from "../listenHttp.ts";
+import * as ListenRebind from "../listenRebind.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as ServerLifecycleEvents from "../serverLifecycleEvents.ts";
 import { HttpServerLive } from "../server.ts";
 
 export interface ListenHarnessOptions {
@@ -63,7 +67,7 @@ export interface ListenHarness {
   /** Ephemeral port the server actually bound. */
   readonly port: number;
   /** Real TCP connect to `address:port`; never resolves hostnames. */
-  readonly probe: (address: string) => Effect.Effect<TcpProbeOutcome>;
+  readonly probe: (address: string, port?: number) => Effect.Effect<TcpProbeOutcome>;
   /** Policy as served by the unauthenticated `/api/auth/session` descriptor, over loopback. */
   readonly readAuthPolicy: Effect.Effect<ServerAuthPolicy, ListenHarnessError>;
   /**
@@ -73,14 +77,30 @@ export interface ListenHarness {
    */
   readonly readAuthPolicyAt: (
     address: string,
+    port?: number,
   ) => Effect.Effect<ServerAuthPolicy, ListenHarnessError>;
+  /**
+   * The live rebind, driven at the service the authenticated
+   * `POST /api/listen/interfaces` handler calls. The route itself is mounted
+   * below, so a contract break still shows up here, but a test does not have to
+   * mint an `access:write` token to exercise the socket moves.
+   */
+  readonly rebind: ListenRebind.ListenRebind["Service"]["rebind"];
+  /** Where this harness writes its runtime state, which a rebind rewrites. */
+  readonly serverRuntimeStatePath: string;
 }
 
-const harnessApi = HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth);
+const harnessApi = HttpApi.make("environment")
+  .add(EnvironmentHttpApi.groups.auth)
+  .add(EnvironmentHttpApi.groups.listen);
 
 const harnessRoutes = HttpApiBuilder.layer(harnessApi).pipe(
   Layer.provide(authHttpApiLayer),
+  Layer.provide(listenHttpApiLayer),
   Layer.provide(environmentAuthenticatedAuthLayer),
+  // The route announces a move on the lifecycle stream; nothing in the harness
+  // subscribes, so this only has to exist.
+  Layer.provide(ServerLifecycleEvents.layer),
 );
 
 const harnessAuthLayer = EnvironmentAuth.layer.pipe(
@@ -188,14 +208,18 @@ export const startListenHarness = (
     const context = yield* Layer.build(layer).pipe(Effect.orDie);
     const server = Context.get(context, HttpServer.HttpServer);
     const listen = Context.get(context, ListenAddress.ListenAddress);
+    const rebind = Context.get(context, ListenRebind.ListenRebind);
+    const config = Context.get(context, ServerConfig.ServerConfig);
     const address = server.address as HttpServer.TcpAddress;
     const port = address.port;
 
     return {
       listen,
       port,
-      probe: (target) => tcpProbe(target, port),
+      probe: (target, targetPort) => tcpProbe(target, targetPort ?? port),
       readAuthPolicy: readSessionPolicy("127.0.0.1", port),
-      readAuthPolicyAt: (address) => readSessionPolicy(address, port),
+      readAuthPolicyAt: (address, targetPort) => readSessionPolicy(address, targetPort ?? port),
+      rebind: rebind.rebind,
+      serverRuntimeStatePath: config.serverRuntimeStatePath,
     } satisfies ListenHarness;
   });

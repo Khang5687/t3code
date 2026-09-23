@@ -1,3 +1,5 @@
+import { PLAN_IMPLEMENTATION_PROMPT_PREFIX } from "@t3tools/client-runtime/composer-prompt-history";
+
 export function proposedPlanTitle(planMarkdown: string): string | null {
   const heading = planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim();
   return heading && heading.length > 0 ? heading : null;
@@ -69,9 +71,6 @@ function sanitizePlanFileSegment(input: string): string {
     .replace(/^-+|-+$/g, "");
   return sanitized.length > 0 ? sanitized : "plan";
 }
-
-/** Prefix of the message the app sends when the user approves a plan. */
-export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
 
 export function buildPlanImplementationPrompt(planMarkdown: string): string {
   return `${PLAN_IMPLEMENTATION_PROMPT_PREFIX}${planMarkdown.trim()}`;

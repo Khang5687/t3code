@@ -2,6 +2,7 @@ import {
   type EnvironmentId,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type ServerLifecycleMovedPayload,
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
   type ServerSelfUpdateProgressEvent,
@@ -481,14 +482,19 @@ function serverConfigStateChanges(
   );
 }
 
-export function applyServerWelcomeEvent(
-  current: EnvironmentServerWelcomeState,
+export function applyServerLifecycleEvent(
+  current: EnvironmentServerLifecycleState,
   session: RpcSession,
   event: {
-    readonly type: "welcome" | "ready";
+    readonly type: "welcome" | "ready" | "moved";
     readonly payload: unknown;
   },
-): EnvironmentServerWelcomeState {
+): EnvironmentServerLifecycleState {
+  // Kept whichever session carried it, and never cleared: clearing on
+  // reconnect would race the very reconnect the move causes.
+  if (event.type === "moved") {
+    return { ...current, moved: event.payload as ServerLifecycleMovedPayload };
+  }
   return event.type === "welcome" && current.currentSession === session
     ? {
         ...current,
@@ -498,100 +504,127 @@ export function applyServerWelcomeEvent(
     : current;
 }
 
-export interface EnvironmentServerWelcomeState {
+export interface EnvironmentServerLifecycleState {
   readonly currentSession: RpcSession | null;
   readonly welcomeSession: RpcSession | null;
   readonly welcome: ServerLifecycleWelcomePayload | null;
+  /** The last move this environment announced, or null if it never moved. */
+  readonly moved: ServerLifecycleMovedPayload | null;
+}
+
+const announcedMoves = new WeakSet<ServerLifecycleMovedPayload>();
+
+/**
+ * The port to announce for a move no surface has announced yet, or null when
+ * there is nothing to say.
+ *
+ * Only a port change is worth saying: it retires every listener, so every
+ * client is about to be dropped and the new port is somewhere to go. An
+ * interface-only rebind leaves a connected client's socket exactly where it is,
+ * and telling it the server moved is the noise that makes the message
+ * worthless.
+ *
+ * Claiming, rather than comparing values, because the value a surface reads is
+ * sticky and the component reading it remounts on its own schedule: on web when
+ * the auth gate flips, on mobile on the very reconnect the move causes.
+ */
+export function claimServerMoveAnnouncement(
+  moved: ServerLifecycleMovedPayload | null,
+): number | null {
+  if (moved === null || !moved.portChanged || announcedMoves.has(moved)) {
+    return null;
+  }
+  announcedMoves.add(moved);
+  return moved.port;
 }
 
 export function resolveServerWelcomeState(
-  state: EnvironmentServerWelcomeState,
+  state: EnvironmentServerLifecycleState,
 ): ServerLifecycleWelcomePayload | null {
   return state.currentSession === state.welcomeSession ? state.welcome : null;
 }
 
-export const makeEnvironmentServerWelcomeState = Effect.fn("EnvironmentServerWelcomeState.make")(
-  function* () {
-    const supervisor = yield* EnvironmentSupervisor;
-    const initialSession = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
-    const state = yield* SubscriptionRef.make<EnvironmentServerWelcomeState>({
-      currentSession: initialSession,
-      welcomeSession: null,
-      welcome: null,
-    });
+export const makeEnvironmentServerLifecycleState = Effect.fn(
+  "EnvironmentServerLifecycleState.make",
+)(function* () {
+  const supervisor = yield* EnvironmentSupervisor;
+  const initialSession = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
+  const state = yield* SubscriptionRef.make<EnvironmentServerLifecycleState>({
+    currentSession: initialSession,
+    welcomeSession: null,
+    welcome: null,
+    moved: null,
+  });
 
-    const updateWithCurrentSession = Effect.fn(
-      "EnvironmentServerWelcomeState.updateWithCurrentSession",
-    )(function* (
-      update: (
-        current: EnvironmentServerWelcomeState,
-        currentSession: RpcSession | null,
-      ) => EnvironmentServerWelcomeState,
-    ) {
-      return yield* SubscriptionRef.modifyEffect(state, (current) =>
-        SubscriptionRef.get(supervisor.session).pipe(
-          Effect.map(
-            (latestSession) =>
-              [undefined, update(current, Option.getOrNull(latestSession))] as const,
-          ),
+  const updateWithCurrentSession = Effect.fn(
+    "EnvironmentServerLifecycleState.updateWithCurrentSession",
+  )(function* (
+    update: (
+      current: EnvironmentServerLifecycleState,
+      currentSession: RpcSession | null,
+    ) => EnvironmentServerLifecycleState,
+  ) {
+    return yield* SubscriptionRef.modifyEffect(state, (current) =>
+      SubscriptionRef.get(supervisor.session).pipe(
+        Effect.map(
+          (latestSession) => [undefined, update(current, Option.getOrNull(latestSession))] as const,
         ),
-      );
-    });
-
-    yield* SubscriptionRef.changes(supervisor.session).pipe(
-      Stream.runForEach(() =>
-        updateWithCurrentSession((current, currentSession) => ({
-          ...current,
-          currentSession,
-        })),
       ),
-      Effect.forkScoped,
     );
+  });
 
-    yield* subscribeDynamicWithSession(
-      WS_METHODS.subscribeServerLifecycle,
-      Effect.fn("EnvironmentServerWelcomeState.makeSubscribeInput")(function* (session) {
-        yield* updateWithCurrentSession((current, currentSession) =>
-          currentSession === session
-            ? {
-                ...current,
-                currentSession,
-                welcomeSession: session,
-                welcome: null,
-              }
-            : { ...current, currentSession },
-        );
-        return {};
-      }),
-    ).pipe(
-      Stream.runForEach(([session, event]) =>
-        updateWithCurrentSession((current, currentSession) =>
-          applyServerWelcomeEvent(
-            {
+  yield* SubscriptionRef.changes(supervisor.session).pipe(
+    Stream.runForEach(() =>
+      updateWithCurrentSession((current, currentSession) => ({
+        ...current,
+        currentSession,
+      })),
+    ),
+    Effect.forkScoped,
+  );
+
+  yield* subscribeDynamicWithSession(
+    WS_METHODS.subscribeServerLifecycle,
+    Effect.fn("EnvironmentServerLifecycleState.makeSubscribeInput")(function* (session) {
+      yield* updateWithCurrentSession((current, currentSession) =>
+        currentSession === session
+          ? {
               ...current,
               currentSession,
-            },
-            session,
-            event,
-          ),
+              welcomeSession: session,
+              welcome: null,
+            }
+          : { ...current, currentSession },
+      );
+      return { serverMoved: true };
+    }),
+  ).pipe(
+    Stream.runForEach(([session, event]) =>
+      updateWithCurrentSession((current, currentSession) =>
+        applyServerLifecycleEvent(
+          {
+            ...current,
+            currentSession,
+          },
+          session,
+          event,
         ),
       ),
-      Effect.forkScoped,
-    );
+    ),
+    Effect.forkScoped,
+  );
 
-    return state;
-  },
-);
+  return state;
+});
 
-function serverWelcomeStateChanges(environmentId: EnvironmentId) {
+function serverLifecycleStateChanges(environmentId: EnvironmentId) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentServerWelcomeState().pipe(
-        Effect.map((state) =>
-          SubscriptionRef.changes(state).pipe(Stream.map(resolveServerWelcomeState)),
-        ),
-      ),
+      // The whole state, not just the welcome: one lifecycle subscription feeds
+      // both the welcome and the move, and a second one would cost an extra
+      // stream per environment for two events that arrive once each.
+      makeEnvironmentServerLifecycleState().pipe(Effect.map(SubscriptionRef.changes)),
     ),
   );
 }
@@ -938,17 +971,19 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
     ),
   );
-  const welcomeStateFamily = Atom.family((environmentId: EnvironmentId) =>
+  const lifecycleStateFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
-      .atom(serverWelcomeStateChanges(environmentId), { initialValue: null })
+      .atom(serverLifecycleStateChanges(environmentId), { initialValue: null })
       .pipe(
         Atom.setIdleTTL(5 * 60_000),
-        Atom.withLabel(`environment-data:server:welcome-state:${environmentId}`),
+        Atom.withLabel(`environment-data:server:lifecycle-state:${environmentId}`),
       ),
   );
   const welcomeFamily = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
-      const result = get(welcomeStateFamily(environmentId));
+      const result = AsyncResult.map(get(lifecycleStateFamily(environmentId)), (state) =>
+        state === null ? null : resolveServerWelcomeState(state),
+      );
       if (result._tag !== "Success") return result;
       return result.value === null
         ? AsyncResult.initial<ServerLifecycleWelcomePayload, never>(result.waiting)
@@ -959,6 +994,17 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly environmentId: EnvironmentId;
     readonly input: EnvironmentRpcInput<typeof WS_METHODS.subscribeServerLifecycle>;
   }) => welcomeFamily(target.environmentId);
+  /**
+   * The last move this environment announced. Sticky by design: a surface
+   * announces a move once per value it has not seen, and the value only
+   * changes when the server publishes another move.
+   */
+  const movedFamily = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const result = get(lifecycleStateFamily(environmentId));
+      return result._tag === "Success" ? (result.value?.moved ?? null) : null;
+    }).pipe(Atom.withLabel(`environment-data:server:moved:${environmentId}`)),
+  );
 
   return {
     configValueAtom,
@@ -1050,6 +1096,7 @@ export function createServerEnvironmentAtoms<R, E>(
     }),
     configProjection,
     welcome,
+    movedAtom: movedFamily,
     consumeResetCredit: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:consume-reset-credit",
       tag: WS_METHODS.providerConsumeResetCredit,

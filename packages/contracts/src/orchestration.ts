@@ -798,6 +798,126 @@ export const ThreadPullRequestLink = Schema.Struct({
 });
 export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 
+/** Message-id prefix `thread.fork` gives every message it copies. Inside the
+ *  imported-session namespace, so the copies keep the guards any imported
+ *  message gets, and distinct within it so a fork's own copied history can be
+ *  told apart from history imported from an agent session. */
+export const FORK_HISTORY_MESSAGE_PREFIX = "import:fork:";
+
+/**
+ * How a fork still has to get a provider session, or absent once it owns an
+ * ordinary one. Forking touches no provider, so the fork's first send resolves
+ * this: `resumeFromSource` starts a session from the source's and rolls it back
+ * to the boundary, and `seedFromHistory` is the fallback after that failed, a
+ * fresh session with the copied transcript as context. Both clear on the
+ * attempt, so a fork is never permanently dead and never seeds twice.
+ */
+export const ThreadForkSessionResolution = Schema.Literals(["resumeFromSource", "seedFromHistory"]);
+export type ThreadForkSessionResolution = typeof ThreadForkSessionResolution.Type;
+
+/** Where a forked thread came from. `turnCount` is how many user messages the
+ *  fork copied, which is the boundary expressed as a number because a user
+ *  message carries no `turnId` in the read model. It is the starting point for
+ *  resolving the source's provider session, not a verified checkpoint turn
+ *  count: a user message persisted ahead of its turn (worktree bootstrap) is
+ *  counted like any other, so a consumer that needs a checkpoint must still
+ *  confirm one exists. Apart from `sessionResolution`, which the server clears
+ *  as it resolves the fork's session, this is display-only linkage: no
+ *  parent/child behaviour, no cascading deletes. */
+export const ThreadForkOrigin = Schema.Struct({
+  threadId: ThreadId,
+  turnCount: NonNegativeInt,
+  /** The source's title at fork time, shown once the source is deleted.
+   *  Optional: origins recorded before it was captured have none. */
+  title: Schema.optional(TrimmedNonEmptyString),
+  sessionResolution: Schema.optional(ThreadForkSessionResolution),
+});
+export type ThreadForkOrigin = typeof ThreadForkOrigin.Type;
+
+/** Where a fork's files live. `same-workspace` shares the source's branch and
+ *  worktree untouched; `new-worktree` gets a fresh worktree restored to the
+ *  checkpoint at the boundary message. Restoring into the source's own
+ *  workspace is never an option. */
+export const ThreadForkLocation = Schema.Literals(["same-workspace", "new-worktree"]);
+export type ThreadForkLocation = typeof ThreadForkLocation.Type;
+
+/**
+ * Locates a fork's cut point: `index` is where the history the fork copies
+ * stops, and `turnCount` is how many user messages precede it, which is what
+ * both `ThreadForkOrigin` and the boundary's checkpoint are keyed by.
+ * `undefined` when `messageId` is not a user message of `messages`.
+ */
+export function resolveForkBoundary(
+  messages: ReadonlyArray<{ readonly id: MessageId; readonly role: OrchestrationMessage["role"] }>,
+  messageId: MessageId,
+): { readonly index: number; readonly turnCount: number } | undefined {
+  const index = messages.findIndex((message) => message.id === messageId);
+  if (index === -1 || messages[index]?.role !== "user") return undefined;
+  const turnCount = messages.slice(0, index).filter((message) => message.role === "user").length;
+  return { index, turnCount };
+}
+
+/**
+ * Which captured checkpoint a fork at `boundaryIndex` restores from.
+ *
+ * Keyed by the turns the copied history carries, never by counting its user
+ * messages: checkpoint turn counts advance once per turn that completed, while
+ * copied history (an imported provider session, or a fork of a fork) leaves
+ * user messages in a thread that ran no turn of its own. The two numbers drift
+ * apart, and the same number then names a different point in each — which
+ * would restore the wrong files rather than refuse. `0` is the pre-turn
+ * baseline.
+ */
+export function resolveForkCheckpointTurn(
+  messages: ReadonlyArray<Pick<OrchestrationMessage, "turnId">>,
+  checkpoints: ReadonlyArray<
+    Pick<OrchestrationCheckpointSummary, "turnId" | "checkpointTurnCount">
+  >,
+  boundaryIndex: number,
+): number {
+  const turnsBeforeCut = new Set(messages.slice(0, boundaryIndex).map((message) => message.turnId));
+  return checkpoints.reduce(
+    (turnCount, checkpoint) =>
+      turnsBeforeCut.has(checkpoint.turnId)
+        ? Math.max(turnCount, checkpoint.checkpointTurnCount)
+        : turnCount,
+    0,
+  );
+}
+
+/**
+ * Whether that turn has files a fork could restore. Turn 0 is the pre-turn
+ * baseline, which falls back to the workspace HEAD the same way the revert path
+ * does. A capture that failed or never happened is not offered, so the option
+ * never appears for a restore that would fail.
+ */
+export function hasThreadCheckpointForTurn(
+  checkpoints: ReadonlyArray<
+    Pick<OrchestrationCheckpointSummary, "checkpointTurnCount" | "status">
+  >,
+  turnCount: number,
+): boolean {
+  return (
+    turnCount === 0 ||
+    checkpoints.some(
+      (checkpoint) => checkpoint.checkpointTurnCount === turnCount && checkpoint.status === "ready",
+    )
+  );
+}
+
+/**
+ * Whether "Fork into new worktree" is on offer. The one gate the server and
+ * both clients read, so a client never offers what the server would reject: a
+ * worktree needs a git repo to branch from, and the restore needs a checkpoint
+ * at the boundary.
+ */
+export function canForkIntoNewWorktree(
+  isGitProject: boolean,
+  hasCheckpointForTurn: boolean,
+): boolean {
+  return isGitProject && hasCheckpointForTurn;
+}
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -846,6 +966,9 @@ export const OrchestrationThread = Schema.Struct({
   // Manual Active placement. Keyless threads retain their creation/re-entry
   // order above the arranged run. Settling clears this slot.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Set once, at creation, on threads made by `thread.fork`.
+  // Optional so payloads from pre-fork servers still decode.
+  forkedFrom: Schema.optional(Schema.NullOr(ThreadForkOrigin)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -921,6 +1044,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // See OrchestrationThread.forkedFrom. The shell carries it because the
+  // session-ensure path reads `sessionResolution` before every turn start.
+  forkedFrom: Schema.optional(Schema.NullOr(ThreadForkOrigin)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1139,6 +1265,34 @@ const ThreadCreateCommand = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
   historyImport: Schema.optional(Schema.Literal(true)),
+});
+
+/**
+ * Branch a thread at one of its user messages without touching the source.
+ *
+ * The boundary is a `messageId` rather than a `turnId` because user messages
+ * carry no turn id until the provider acknowledges the turn, and a fork must
+ * work while the source is mid-run. The fork's history is every message the
+ * source recorded strictly before that one; the boundary message itself is not
+ * copied (clients put its text and attachments in the fork's composer).
+ *
+ * Title, model, runtime mode, interaction mode, branch and worktree path are
+ * all derived from the source server-side, so the client only names the two
+ * threads and the cut point.
+ */
+const ThreadForkCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  /** Client-minted, like `thread.create`. */
+  threadId: ThreadId,
+  messageId: MessageId,
+  /** Defaulted on decode so a client that predates fork locations still forks
+   *  in place. */
+  location: ThreadForkLocation.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("same-workspace" as const)),
+  ),
+  createdAt: IsoDateTime,
 });
 
 const ThreadDeleteCommand = Schema.Struct({
@@ -1483,6 +1637,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1519,6 +1674,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1657,6 +1813,21 @@ const ThreadActivityAppendCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Move a fork's lazy-session marker on, or clear it.
+ *
+ * Server-only: the provider command reactor owns this transition as it resolves
+ * the fork's session on its first send. `resolution` absent means the fork now
+ * has an ordinary session and no marker check applies to it again.
+ */
+const ThreadForkSessionResolveCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork-session.resolve"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  resolution: Schema.optional(ThreadForkSessionResolution),
+  createdAt: IsoDateTime,
+});
+
 const ThreadRevertCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.revert.complete"),
   commandId: CommandId,
@@ -1730,6 +1901,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
+  ThreadForkSessionResolveCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
   ThreadTitleGenerateCompleteCommand,
@@ -1831,6 +2003,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Only `thread.fork` sets this.
+  // Optional so payloads from pre-fork servers still decode.
+  forkedFrom: Schema.optional(Schema.NullOr(ThreadForkOrigin)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1921,6 +2096,10 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Only `thread.fork-session.resolve` sets this, to move a fork's
+      `sessionResolution` on. It rides the existing metadata event so the
+      marker needs no event type, column or migration of its own. */
+  forkedFrom: Schema.optional(ThreadForkOrigin),
   updatedAt: IsoDateTime,
 });
 

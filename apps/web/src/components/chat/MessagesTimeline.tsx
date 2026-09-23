@@ -31,6 +31,7 @@ import {
   workEntryViewedImagePath,
   summarizeToolGroup,
   omitSupersededLifecycleMarkers,
+  workEntrySignalsWarning,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import type {
@@ -51,6 +52,7 @@ const NOOP_OPEN_AGENTS = () => {};
 const EMPTY_QUEUED_TURNS: ReadonlyArray<OrchestrationQueuedTurn> = [];
 const NOOP_QUEUED_MESSAGE_ACTION = (_id: string) => {};
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
+const NOOP_FORK_FROM_MESSAGE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
@@ -114,6 +116,7 @@ import {
   CircleAlertIcon,
   DownloadIcon,
   EyeIcon,
+  GitBranchPlusIcon,
   GlobeIcon,
   HammerIcon,
   MessageCircleIcon,
@@ -163,6 +166,7 @@ import {
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { CopyTimelineRowIdButton } from "./CopyTimelineRowIdButton";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { inferEntryKindFromPath } from "../../pierre-icons";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -195,7 +199,10 @@ import {
   toolGroupAction,
   workEntryDisplayLabel,
   workEntryIsVisibleInGroup,
-  worktreeSetupAgentStarted,
+  workEntryRecordRef,
+  worktreeSetupHandedOff,
+  timelineRowRecordRef,
+  type TimelineRowRecordRef,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -281,6 +288,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onForkFromMessage: (messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
@@ -429,6 +437,8 @@ interface MessagesTimelineProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   supportsConversationRollback: boolean;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  /** Opens the fork-location dialog for a user message. Same gate as revert. */
+  onForkFromMessage?: (messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -499,6 +509,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   supportsConversationRollback,
   onRevertToTurnCount,
+  onForkFromMessage = NOOP_FORK_FROM_MESSAGE,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   isRevertingCheckpoint,
   onImageExpand,
@@ -1146,6 +1157,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertToTurnCount,
+      onForkFromMessage,
       onUseArtifactTemplate,
       onImageExpand,
       onFileOpen,
@@ -1181,6 +1193,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertToTurnCount,
+      onForkFromMessage,
       onUseArtifactTemplate,
       onImageExpand,
       onFileOpen,
@@ -1208,7 +1221,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const backgroundWorktreeSetup =
     worktreeSetup !== null &&
     worktreeSetup.phase === "running" &&
-    worktreeSetupAgentStarted(worktreeSetup) &&
+    worktreeSetupHandedOff(worktreeSetup) &&
     latestTurn?.startedAt != null
       ? worktreeSetup
       : null;
@@ -2215,7 +2228,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </Tooltip>
           <div className="flex items-center gap-0.5">
             {typeof revertTurnCount === "number" && (
-              <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+              <>
+                <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+                <ForkUserMessageButton messageId={row.message.id} />
+              </>
             )}
             {resolvedContext.text && (
               <MessageCopyButton
@@ -2236,6 +2252,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 variant="ghost"
               />
             )}
+            {/* Last in the cluster so it does not reorder the tab stops the
+                revert and copy buttons already own. */}
+            <CopyTimelineRowIdButton
+              recordRef={timelineRowRecordRef(row)}
+              threadId={ctx.threadRef?.threadId ?? null}
+              size="xs"
+            />
           </div>
         </div>
       </div>
@@ -2297,6 +2320,51 @@ function RevertUserMessageButton({
 }
 
 /**
+ * Branches the thread at this message instead of rewinding it. Sits under the
+ * same gate as its neighbour, but never disables itself while the agent runs:
+ * forking leaves the source alone, and branching off an in-progress
+ * conversation is the point.
+ */
+function ForkUserMessageButton({ messageId }: { messageId: MessageId }) {
+  const ctx = use(TimelineRowCtx);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => ctx.onForkFromMessage(messageId)}
+            aria-label="Fork from here"
+          />
+        }
+      >
+        <GitBranchPlusIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Fork from here</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
+ * Reveal-on-hover for metadata inside a `group/timeline-row` container.
+ * Hidden metadata sits outside the row layout so it costs nothing at rest,
+ * and hover or focus brings it back into flow. Shared by the timestamp and
+ * its neighbours so the two cannot drift apart. A control that must stay
+ * reachable without hover adds its own `pointer-coarse:` overrides.
+ */
+const TIMELINE_ROW_HOVER_REVEAL =
+  "pointer-events-none absolute opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100 group-focus-within/timeline-row:pointer-events-auto group-focus-within/timeline-row:static group-focus-within/timeline-row:opacity-100";
+
+/** Touch has no hover, so an action must stay tappable at rest. */
+const TIMELINE_ROW_ACTION_REVEAL = cn(
+  TIMELINE_ROW_HOVER_REVEAL,
+  "pointer-coarse:pointer-events-auto pointer-coarse:static pointer-coarse:opacity-100",
+);
+
+/**
  * Hover-revealed wall-clock time with a full-date tooltip — the same metadata
  * presentation as message rows, for work entries and turn folds. The parent
  * carries `group/timeline-row`; hover or focus on an existing control reveals
@@ -2320,7 +2388,8 @@ function TimelineRowTimestamp({
         render={
           <span
             className={cn(
-              "pointer-events-none absolute me-1 shrink-0 whitespace-nowrap rounded-md text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100 group-focus-within/timeline-row:pointer-events-auto group-focus-within/timeline-row:static group-focus-within/timeline-row:opacity-100",
+              TIMELINE_ROW_HOVER_REVEAL,
+              "me-1 shrink-0 whitespace-nowrap rounded-md text-muted-foreground text-xs tabular-nums",
               className,
             )}
           />
@@ -2395,6 +2464,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           <AssistantMessageMeta
             className="mt-1.5"
             message={row.message}
+            recordRef={timelineRowRecordRef(row)}
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
           />
@@ -2414,6 +2484,7 @@ function AssistantMetaTimelineRow({
       <AssistantMessageMeta
         className="mt-0.5"
         message={row.message}
+        recordRef={timelineRowRecordRef(row)}
         showCopyButton={row.showAssistantCopyButton}
         copyStreaming={row.assistantCopyStreaming}
         alwaysVisible
@@ -2425,12 +2496,14 @@ function AssistantMetaTimelineRow({
 function AssistantMessageMeta({
   className,
   message,
+  recordRef,
   showCopyButton,
   copyStreaming,
   alwaysVisible = false,
 }: {
   className?: string;
   message: ChatMessage;
+  recordRef: TimelineRowRecordRef | null;
   showCopyButton: boolean;
   copyStreaming: boolean;
   alwaysVisible?: boolean;
@@ -2451,6 +2524,16 @@ function AssistantMessageMeta({
         message={message}
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
+      />
+      {/* The settled-turn meta row is always visible, so the copy-ID icon
+          carries its own hover gate. It stays in layout either way, so the
+          gate must drop hit-testing too or an invisible target would sit
+          here and copy on a stray click. */}
+      <CopyTimelineRowIdButton
+        recordRef={recordRef}
+        threadId={ctx.threadRef?.threadId ?? null}
+        size="xs"
+        className="pointer-events-none opacity-0 transition-opacity duration-200 focus-within:pointer-events-auto focus-within:opacity-100 group-hover/assistant:pointer-events-auto group-hover/assistant:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
       />
       {!message.streaming && (
         <Tooltip>
@@ -4807,8 +4890,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     setExpanded(next);
   };
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
-  const showFailedIndicator = workEntryDisplayIndicatesToolFailure(workEntry);
+  const showWarningIndicator = workEntrySignalsWarning(workEntry);
+  const showFailedIndicator =
+    !showWarningIndicator && workEntryDisplayIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
     showFailedIndicator &&
     (workEntrySignalsSevereFailure(workEntry) || !workLogEntryIsToolLike(workEntry));
@@ -4949,6 +5033,11 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
             <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
           ) : null}
           <TimelineRowTimestamp createdAt={workEntry.createdAt} timestampFormat={timestampFormat} />
+          <CopyTimelineRowIdButton
+            recordRef={workEntryRecordRef(workEntry)}
+            threadId={threadRef?.threadId ?? null}
+            className={TIMELINE_ROW_ACTION_REVEAL}
+          />
           <span
             className={cn(
               "flex size-4 shrink-0 items-center justify-center",

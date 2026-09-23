@@ -5,9 +5,12 @@ import {
   CommandId,
   defaultInstanceIdForDriver,
   EventId,
+  FORK_HISTORY_MESSAGE_PREFIX,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
+  type ThreadForkOrigin,
+  type ThreadForkSessionResolution,
   type ProviderInstanceId,
   type ProjectId,
   type OrchestrationSession,
@@ -90,6 +93,18 @@ type ProviderIntentEvent = Extract<
       | "thread.session-set";
   }
 >;
+
+/** Names the failed operation on a fork's resume error, so the turn-start
+ *  failure path can tell it apart from an ordinary provider fault. */
+const FORK_RESUME_METHOD = "thread.fork.resume";
+
+const isForkResumeFailure = (cause: Cause.Cause<unknown>): boolean => {
+  const failReason = cause.reasons.find(Cause.isFailReason);
+  return (
+    isProviderAdapterRequestError(failReason?.error) &&
+    failReason.error.method === FORK_RESUME_METHOD
+  );
+};
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -323,7 +338,8 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
-      | "provider.session.stop.failed";
+      | "provider.session.stop.failed"
+      | "fork.resume.failed";
     readonly summary: string;
     readonly detail: string;
     readonly turnId: TurnId | null;
@@ -607,12 +623,195 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const setForkSessionResolution = (input: {
+    readonly threadId: ThreadId;
+    readonly resolution?: ThreadForkSessionResolution;
+    readonly createdAt: string;
+  }) =>
+    serverCommandId("fork-session-resolve").pipe(
+      Effect.flatMap((commandId) =>
+        orchestrationEngine.dispatch({
+          type: "thread.fork-session.resolve",
+          commandId,
+          threadId: input.threadId,
+          ...(input.resolution !== undefined ? { resolution: input.resolution } : {}),
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+
+  /**
+   * The copied history a fork was created with, rendered as prompt context.
+   *
+   * Only `import:fork:` messages count: they are exactly what `thread.fork`
+   * copied, so a send the user made in the fork meanwhile, and history from an
+   * agent-session import, both stay out. Formatting reuses the title
+   * formatter, which caps the block at 8,000 characters in conversation order
+   * and marks what it dropped. A fork with a long history is therefore seeded
+   * with an abridged transcript; a dedicated formatter is the upgrade if that
+   * ceiling proves too low.
+   */
+  const forkHistoryContext = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const detail = yield* resolveThreadDetail(threadId);
+    const copied = (detail?.messages ?? []).filter(
+      (message) =>
+        message.id.startsWith(FORK_HISTORY_MESSAGE_PREFIX) &&
+        (message.role === "user" || message.role === "assistant"),
+    );
+    if (copied.length === 0) {
+      return undefined;
+    }
+    const { message } = formatThreadTitleContext(copied);
+    const transcript = message.trim();
+    return transcript.length === 0
+      ? undefined
+      : `This thread was forked from an earlier conversation, which could not be resumed. Continue from the transcript below.\n\n<forked-conversation>\n${transcript}\n</forked-conversation>`;
+  });
+
+  /**
+   * Give a fork the provider session it was created without.
+   *
+   * `resumeFromSource` starts the fork's own session from the source thread's
+   * persisted resume handle, then rewinds that copy to the fork's boundary. The
+   * source is only ever read: its binding, its cursor and its live session stay
+   * exactly as they were, which is what makes forking non-destructive. Only
+   * providers that report `supportsForkResume` take this path, since only
+   * they keep the rewind off the source's native conversation.
+   * `seedFromHistory` is the fallback once that failed: a brand-new session,
+   * with the copied transcript supplied as the first turn's context by the
+   * caller.
+   *
+   * Either way the marker clears as soon as a session exists, so a later
+   * failure cannot loop back into seeding and every later send in the fork
+   * takes the ordinary path.
+   */
+  const resolveForkSession = Effect.fn("resolveForkSession")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly forkedFrom: ThreadForkOrigin;
+    readonly provider: ProviderDriverKind;
+    /** The instance the fork's session starts on. */
+    readonly instanceId: ProviderInstanceId;
+    readonly startProviderSession: (options?: {
+      readonly resumeCursor?: unknown;
+      readonly forkResumeCursor?: boolean;
+    }) => Effect.Effect<ProviderSession, ProviderServiceError>;
+    readonly createdAt: string;
+  }) {
+    const clearMarker = setForkSessionResolution({
+      threadId: input.threadId,
+      createdAt: input.createdAt,
+    });
+
+    if (input.forkedFrom.sessionResolution === "seedFromHistory") {
+      // `null`, not `undefined`: a resume that started a session before it
+      // failed left a cursor on this thread's binding, and that half-resumed
+      // session is exactly what this send replaces.
+      const seeded = yield* input.startProviderSession({ resumeCursor: null });
+      yield* clearMarker;
+      return seeded;
+    }
+
+    const sourceThreadId = input.forkedFrom.threadId;
+    const resumed = yield* Effect.gen(function* () {
+      // The gate Edit from here uses, asked of the source: the fork has no
+      // binding to route yet and inherits the source's provider.
+      yield* providerService.assertConversationRollbackSupported(sourceThreadId);
+      if ((yield* providerService.getCapabilities(input.instanceId)).supportsForkResume !== true) {
+        return yield* new ProviderAdapterRequestError({
+          provider: providerErrorLabel(input.provider),
+          method: FORK_RESUME_METHOD,
+          detail:
+            "This provider cannot resume a session into a fork without changing the original.",
+        });
+      }
+      const resumeCursor = yield* providerService.getPersistedResumeCursor(sourceThreadId);
+      if (resumeCursor === undefined || resumeCursor === null) {
+        return yield* new ProviderAdapterRequestError({
+          provider: providerErrorLabel(input.provider),
+          method: FORK_RESUME_METHOD,
+          detail: `Thread '${sourceThreadId}' has no provider session left to resume.`,
+        });
+      }
+      const source = yield* resolveThreadDetail(sourceThreadId);
+      if (!source) {
+        return yield* new ProviderAdapterRequestError({
+          provider: providerErrorLabel(input.provider),
+          method: FORK_RESUME_METHOD,
+          detail: `Source thread '${sourceThreadId}' no longer exists.`,
+        });
+      }
+      // The cursor only means something to the instance that owns the source's
+      // session: another instance has its own provider home.
+      const sourceInstanceId =
+        source.session?.providerInstanceId ?? source.modelSelection.instanceId;
+      if (sourceInstanceId !== input.instanceId) {
+        return yield* new ProviderAdapterRequestError({
+          provider: providerErrorLabel(input.provider),
+          method: FORK_RESUME_METHOD,
+          detail: `The fork runs on provider instance '${input.instanceId}', but the original session belongs to '${sourceInstanceId}'.`,
+        });
+      }
+      const session = yield* input.startProviderSession({ resumeCursor, forkResumeCursor: true });
+      // How many turns the source ran past the boundary. Both sides count user
+      // messages in the source's own projection, the way `forkedFrom.turnCount`
+      // was measured, because a user message never carries a turn id. A message
+      // that reached no provider (worktree bootstrap, a failed send) is counted
+      // like any other, so this can rewind one turn too far on a source that
+      // holds one.
+      const rewindTurns = Math.max(
+        0,
+        source.messages.filter((message) => message.role === "user").length -
+          input.forkedFrom.turnCount,
+      );
+      if (rewindTurns > 0) {
+        // Targets the fork's own session id, never the source's.
+        yield* providerService.rollbackConversation({
+          threadId: input.threadId,
+          numTurns: rewindTurns,
+        });
+      }
+      return session;
+    }).pipe(
+      // Expected failures only: a defect leaves the marker alone, so the next
+      // send retries the resume rather than degrading on a bug.
+      Effect.catch((error) =>
+        // A rollback that failed after the session started leaves the fork
+        // holding the source's conversation in full. Drop it rather than leave
+        // a live session no send will use.
+        providerService.stopSession({ threadId: input.threadId }).pipe(
+          Effect.ignore,
+          // Flip the marker before failing: the turn does not start, and the
+          // banner this error renders promises the next send will seed.
+          Effect.andThen(
+            setForkSessionResolution({
+              threadId: input.threadId,
+              resolution: "seedFromHistory",
+              createdAt: input.createdAt,
+            }),
+          ),
+          Effect.andThen(
+            new ProviderAdapterRequestError({
+              provider: providerErrorLabel(input.provider),
+              method: FORK_RESUME_METHOD,
+              detail: `${formatFailureDetail(Cause.fail(error))} Your next send starts a fresh session from the forked transcript.`,
+            }),
+          ),
+        ),
+      ),
+    );
+    yield* clearMarker;
+    return resumed;
+  });
+
   const ensureSessionForThread = Effect.fn("ensureSessionForThread")(function* (
     threadId: ThreadId,
     createdAt: string,
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      /** Set by the send path, which is the only caller that can carry a
+       *  fork's copied transcript into the turn it is about to start. */
+      readonly carriesForkHistory?: boolean;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -753,6 +952,7 @@ const make = Effect.gen(function* () {
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
+      readonly forkResumeCursor?: boolean;
       readonly provider?: ProviderDriverKind;
     }) =>
       providerService
@@ -764,6 +964,7 @@ const make = Effect.gen(function* () {
           ...(thread.title ? { title: thread.title } : {}),
           modelSelection: desiredModelSelection,
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          ...(input?.forkResumeCursor === true ? { forkResumeCursor: true } : {}),
           runtimeMode: desiredRuntimeMode,
         })
         .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
@@ -796,6 +997,34 @@ const make = Effect.gen(function* () {
           createdAt,
         });
       });
+
+    // A fork is created without touching any provider, so its session is
+    // resolved here, on its first send. Ahead of the existing-session branch
+    // below, which would otherwise adopt whatever a failed resume left behind.
+    const forkedFrom = thread.forkedFrom;
+    if (forkedFrom != null && forkedFrom.sessionResolution !== undefined) {
+      if (
+        forkedFrom.sessionResolution === "seedFromHistory" &&
+        options?.carriesForkHistory !== true
+      ) {
+        // Another caller (a runtime-mode change, a compaction) needs a session
+        // but cannot carry the transcript into a turn. Give it a clean session
+        // and leave the marker for the send that can.
+        const started = yield* startProviderSession({ resumeCursor: null });
+        yield* bindSessionToThread(started);
+        return started.threadId;
+      }
+      const forkSession = yield* resolveForkSession({
+        threadId,
+        forkedFrom,
+        provider: preferredProvider,
+        instanceId: desiredInstanceId,
+        startProviderSession,
+        createdAt,
+      });
+      yield* bindSessionToThread(forkSession);
+      return forkSession.threadId;
+    }
 
     const existingSessionThreadId =
       thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
@@ -884,14 +1113,24 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
+    // Read before the ensure below clears the marker. A fork whose resume
+    // failed gets its copied history as context on this one turn, because the
+    // fresh session about to start has never seen the conversation.
+    const forkHistory =
+      thread.forkedFrom?.sessionResolution === "seedFromHistory"
+        ? yield* forkHistoryContext(input.threadId)
+        : undefined;
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
+      carriesForkHistory: true,
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const normalizedInput = toNonEmptyProviderInput(
+      forkHistory === undefined ? input.messageText : `${forkHistory}\n\n${input.messageText}`,
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -1302,10 +1541,14 @@ const make = Effect.gen(function* () {
       return;
     }
     const { message, hasOtherUserMessages } = turnStart.value;
-    const appendTurnStartFailure = (summary: string, detail: string) =>
+    const appendTurnStartFailure = (
+      summary: string,
+      detail: string,
+      kind: "provider.turn.start.failed" | "fork.resume.failed" = "provider.turn.start.failed",
+    ) =>
       appendProviderFailureActivity({
         threadId: event.payload.threadId,
-        kind: "provider.turn.start.failed",
+        kind,
         summary,
         detail,
         turnId: null,
@@ -1324,12 +1567,24 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }
       const detail = formatFailureDetail(cause);
+      // One banner, named after what actually failed: a fork that could not
+      // resume its source session is its own state, not a provider fault.
+      // Clients match the dedicated kind to show it as a recoverable warning.
+      const forkResumeFailed = isForkResumeFailure(cause);
       return setThreadSessionErrorOnTurnStartFailure({
         threadId: event.payload.threadId,
         detail,
         createdAt: event.payload.createdAt,
       }).pipe(
-        Effect.flatMap(() => appendTurnStartFailure("Provider turn start failed", detail)),
+        Effect.flatMap(() =>
+          forkResumeFailed
+            ? appendTurnStartFailure(
+                "Fork could not resume the original session",
+                detail,
+                "fork.resume.failed",
+              )
+            : appendTurnStartFailure("Provider turn start failed", detail),
+        ),
         Effect.asVoid,
       );
     };

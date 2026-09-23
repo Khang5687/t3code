@@ -433,6 +433,9 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            // Absent on ordinary threads, like the other optional overlays
+            // here, so a fork costs nothing on every other thread's snapshot.
+            ...(payload.forkedFrom != null ? { forkedFrom: payload.forkedFrom } : {}),
             pullRequests: [],
             branchPullRequest: null,
             latestTurn: null,
@@ -633,6 +636,7 @@ export function projectEvent(
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
                 : {}),
+              ...(payload.forkedFrom !== undefined ? { forkedFrom: payload.forkedFrom } : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,
             }),

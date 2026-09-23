@@ -21,6 +21,8 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
+import type { CreateWorktreeProgress } from "../vcs/GitVcsDriver.ts";
+
 /**
  * Tracks the live stages of a bootstrap worktree setup per thread so clients
  * can render a progress card while the first turn is still being prepared.
@@ -364,3 +366,74 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(WorktreeSetupTracker, make);
+
+/**
+ * Drives the checkout and submodule stages from a `createWorktree` call's
+ * progress. `settle` runs once the call returns: it marks the checkout done
+ * with its file count, a submodule step git never started as skipped, and
+ * records the worktree path. Shared by the worktree bootstrap and a
+ * new-worktree fork so both cards read the same.
+ */
+export const trackWorktreeCheckout = (
+  tracker: Pick<WorktreeSetupTracker["Service"], "stage" | "stageStatus" | "update">,
+  threadId: ThreadId,
+  onWorktreeClaimed: (path: string) => Effect.Effect<void>,
+) => {
+  let checkoutTotal: number | null = null;
+  const fileCount = () =>
+    checkoutTotal === null ? null : `${checkoutTotal.toLocaleString("en-US")} files`;
+  const progress: CreateWorktreeProgress = {
+    // Git has registered the directory at this point, so a cancel during the
+    // submodule step can still remove it.
+    onWorktreeClaimed,
+    onCheckoutProgress: ({ percent, completed, total }) => {
+      checkoutTotal = total;
+      return tracker.stage(threadId, "checkout", {
+        percent,
+        detail: `${completed.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} files`,
+      });
+    },
+    onSubmodulesStarted: () =>
+      tracker
+        .stageStatus(threadId, "checkout", "done", fileCount())
+        .pipe(Effect.andThen(tracker.stageStatus(threadId, "submodules", "running"))),
+    onSubmoduleLine: (line) => {
+      const submodulePath = /Submodule path '([^']+)'/.exec(line)?.[1];
+      return submodulePath === undefined
+        ? Effect.void
+        : tracker.stage(threadId, "submodules", { detail: submodulePath });
+    },
+    onSubmodulesFinished: ({ ok, detail }) =>
+      tracker.stageStatus(
+        threadId,
+        "submodules",
+        ok ? "done" : "warning",
+        ok ? undefined : (detail ?? "submodule checkout failed"),
+      ),
+  };
+  const settle = (worktreePath: string) =>
+    nowIso.pipe(
+      Effect.flatMap((endedAt) =>
+        tracker.update(threadId, (snapshot) => ({
+          ...snapshot,
+          worktreePath,
+          stages: snapshot.stages.map((stage) => {
+            if (stage.id === "checkout" && stage.status === "running") {
+              return {
+                ...stage,
+                status: "done",
+                percent: 100,
+                endedAt,
+                detail: fileCount() ?? stage.detail,
+              };
+            }
+            if (stage.id === "submodules" && stage.status === "pending") {
+              return { ...stage, status: "skipped", detail: "none" };
+            }
+            return stage;
+          }),
+        })),
+      ),
+    );
+  return { progress, settle };
+};

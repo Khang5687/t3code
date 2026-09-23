@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type ServerLifecycleMovedPayload,
   type ServerLifecycleWelcomePayload,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -31,8 +32,9 @@ import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
-  applyServerWelcomeEvent,
-  makeEnvironmentServerWelcomeState,
+  applyServerLifecycleEvent,
+  claimServerMoveAnnouncement,
+  makeEnvironmentServerLifecycleState,
   makeEnvironmentServerConfigState,
   isLegacyUpdateHandoffLoss,
   matchesServerUpdateReadyEvent,
@@ -508,17 +510,18 @@ describe("server state projection", () => {
       currentSession: firstSession,
       welcomeSession: firstSession,
       welcome: null,
+      moved: null,
     };
-    const afterWelcome = applyServerWelcomeEvent(initial, firstSession, {
+    const afterWelcome = applyServerLifecycleEvent(initial, firstSession, {
       type: "welcome",
       payload: welcome,
     });
-    const afterReady = applyServerWelcomeEvent(afterWelcome, firstSession, {
+    const afterReady = applyServerLifecycleEvent(afterWelcome, firstSession, {
       type: "ready",
       payload: {},
     });
     const afterSwitch = { ...afterReady, currentSession: secondSession };
-    const afterBufferedOldWelcome = applyServerWelcomeEvent(afterSwitch, firstSession, {
+    const afterBufferedOldWelcome = applyServerLifecycleEvent(afterSwitch, firstSession, {
       type: "welcome",
       payload: { ...welcome, cwd: "/stale" },
     });
@@ -527,6 +530,62 @@ describe("server state projection", () => {
     expect(resolveServerWelcomeState(afterReady)).toBe(welcome);
     expect(afterBufferedOldWelcome).toBe(afterSwitch);
     expect(resolveServerWelcomeState(afterBufferedOldWelcome)).toBeNull();
+  });
+
+  it("holds one move across the reconnect it causes, and none without one", () => {
+    const firstSession = session({} as WsRpcProtocolClient);
+    const secondSession = session({} as WsRpcProtocolClient);
+    const welcome = {
+      environment: {} as ServerLifecycleWelcomePayload["environment"],
+      cwd: "/repo",
+      projectName: "repo",
+    } as ServerLifecycleWelcomePayload;
+    const moved: ServerLifecycleMovedPayload = { port: 4180, portChanged: true };
+    const initial = {
+      currentSession: firstSession,
+      welcomeSession: firstSession,
+      welcome: null,
+      moved: null,
+    };
+
+    const afterMoved = applyServerLifecycleEvent(initial, firstSession, {
+      type: "moved",
+      payload: moved,
+    });
+    expect(afterMoved.moved).toBe(moved);
+
+    // The socket the move was announced on is retired at the end of the rebind
+    // grace; the client reconnects and the fresh session replays welcome only.
+    const afterReconnect = applyServerLifecycleEvent(
+      {
+        ...afterMoved,
+        currentSession: secondSession,
+        welcomeSession: secondSession,
+        welcome: null,
+      },
+      secondSession,
+      { type: "welcome", payload: welcome },
+    );
+    // Still the same value, so a surface that announces each move it has not
+    // seen announces this one exactly once, not again on every reconnect.
+    expect(afterReconnect.moved).toBe(moved);
+
+    // A plain reconnect, with no move behind it, has nothing to announce.
+    const neverMoved = applyServerLifecycleEvent(initial, firstSession, {
+      type: "welcome",
+      payload: welcome,
+    });
+    expect(neverMoved.moved).toBeNull();
+
+    // One announcement per move, however many times a surface reads the value
+    // it is kept in, and nothing at all for a reconnect that never moved.
+    expect(claimServerMoveAnnouncement(afterMoved.moved)).toBe(4180);
+    expect(claimServerMoveAnnouncement(afterReconnect.moved)).toBeNull();
+    expect(claimServerMoveAnnouncement(neverMoved.moved)).toBeNull();
+
+    // An interface-only rebind leaves a connected client where it is, so it is
+    // published but never announced.
+    expect(claimServerMoveAnnouncement({ port: 4180, portChanged: false })).toBeNull();
   });
 
   it.effect("checks the authoritative session before accepting a buffered welcome", () =>
@@ -563,7 +622,7 @@ describe("server state projection", () => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const state = yield* makeEnvironmentServerWelcomeState().pipe(
+          const state = yield* makeEnvironmentServerLifecycleState().pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
           );
           yield* Deferred.await(firstSubscribed);
@@ -615,7 +674,7 @@ describe("server state projection", () => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const state = yield* makeEnvironmentServerWelcomeState().pipe(
+          const state = yield* makeEnvironmentServerLifecycleState().pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
           );
           yield* Deferred.await(firstSubscribed);
@@ -683,7 +742,7 @@ describe("server state projection", () => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const state = yield* makeEnvironmentServerWelcomeState().pipe(
+          const state = yield* makeEnvironmentServerLifecycleState().pipe(
             Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
           );
           const nextResolved = (

@@ -298,6 +298,27 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+
+  it.effect("hands a fork request to the runtime instead of resuming the cursor", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      NodeAssert.equal(adapter.capabilities.supportsForkResume, true);
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-fork"),
+        resumeCursor: { threadId: "source-native-thread" },
+        forkResumeCursor: true,
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(
+        validationRuntimeFactory.factory.mock.calls[0]?.[0]?.forkResumeCursor,
+        true,
+      );
+    }),
+  );
 });
 
 const sessionRuntimeFactory = makeRuntimeFactory();

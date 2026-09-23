@@ -1,5 +1,52 @@
 # Fork releases
 
+## v0.0.42-fork.3
+
+Built on upstream `v0.0.42`. Adds five features on top of `v0.0.42-fork.2`;
+everything in that release is still here.
+
+### Features
+
+**Fork a thread from a past user message.** "Edit from here" rewinds a thread
+and throws the rest away. Forking keeps the original: pick any of your earlier
+messages, and a new thread starts with the history up to that point and your
+message pre-filled in the composer. Fork into the same workspace, or, when the
+source turn has a checkpoint, into a new worktree that is restored to that
+checkpoint and runs the project setup script (the checkout shows as a setup
+card; a failed one can be retried). The fork's provider session is resolved on
+its first send; Codex forks get a native thread, and if a session cannot be
+resumed the fork carries on from its copied history with a warning. Forking
+works while the source is still running. **Settings > General > After forking**
+chooses between opening the fork and staying put. Web, desktop, and mobile
+(touch and hold a message). See [Forking](../user/forking.md).
+
+**Copy a message's ID.** For debugging: hover a timeline row on web (long-press
+on mobile) and copy its bare ID, or a `thread=…;turn=…;message=…` reference that
+matches the event log.
+
+**`/` opens the skill menu mid-prompt.** A `/` after whitespace opens the skill
+menu anywhere in the prompt, not only at the start of a line. Paths and URLs
+(`/usr/bin`, `https://`) never trigger it. Web and mobile.
+
+**Agents panel sorted by status.** Direct spawns group into Working, Waiting,
+and Settled; rows move only on a status change, Settled collapses past five,
+and the sort choice is remembered.
+
+**Exposure changes apply live.** Changing interfaces or port in
+**Settings > Connections** now rebinds the running server in place instead of
+relaunching the app. Connected clients are told the server moved; a port change
+shows a "Reconnect" action. A bind that fails rolls back to the old listener set
+([ADR 0003](../adr/0003-exposure-is-a-set-of-listen-interfaces.md), Amendment 1).
+
+### Known gaps
+
+- Mobile was verified by tests and typecheck only; the device pass is the
+  checklist in [MOBILE-VERIFICATION.md](./MOBILE-VERIFICATION.md).
+- Cursor, Grok, and Antigravity threads offer no fork action (they do not
+  support conversation rollback).
+- Under WSL, a live rebind narrowing to loopback leaves the WSL backend bound
+  on its previous address until the app is restarted.
+
 ## v0.0.42-fork.2
 
 Built on upstream `v0.0.42`. Supersedes the `v0.0.42-fork.1` draft, which was
@@ -90,6 +137,21 @@ read-only under **Settings > pxpipe**.
 Details and the identity rules: [ADR
 0002](../adr/0002-skill-identity-and-t3-only-disable.md).
 
+**Queue and steer are two different things.** Upstream's queue held a message
+in the web client until the agent's next tool call and then sent it as a steer,
+so Queue and Steer were the same thing one tool call apart, and the queue died
+on reload or thread switch. Now a queued message is server state: it waits as a
+dashed bubble at the end of the thread, starts a turn of its own once the
+running turn ends, and several queued messages run one after another, one turn
+each, in order. It survives a reload, a thread switch, and a closed tab, and
+every client on the thread shows the same rows. Steer sends into the running
+turn at once. Enter queues, `mod+Enter` steers, and **Settings > General >
+Follow-up behavior** flips the default. Stop, a failed turn, and a pending
+approval or question hold the queue; held rows wait for **Send now**, so a queue
+never fires into a session that needs you first. **Remove** puts the text back
+in the composer. Mobile shows the rows and can remove them. Provider adapters
+are untouched. See [Composer](../user/composer.md#send-while-the-agent-is-working).
+
 ### Upstream-bound changes
 
 One fix in this build is written against upstream and is waiting on upstream,
@@ -149,6 +211,12 @@ same way upstream does.
 - Mobile cannot start, stop, or configure a sidecar.
 - The first pxpipe start needs network access to install the pinned version.
   Later starts work offline.
+- Removing a queued message restores its attachments only on the client that
+  queued it; from another client or after a reload you get the text back and a
+  note that the attachments stayed behind.
+- Mobile can see and remove queued messages but cannot send one early.
+- A queued message runs under whatever model and mode the thread has when it
+  drains, not what was selected when it was queued.
 
 ### Updating from upstream
 

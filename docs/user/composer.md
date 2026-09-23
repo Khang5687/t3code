@@ -127,6 +127,8 @@ This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. The action is available only when the provider supports rewind.
 
+To try another direction without losing this one, [fork from the message](./forking.md) instead.
+
 ## Prompt stash
 
 On web and desktop, press `Cmd+S` on macOS or `Ctrl+S` on Windows and Linux to save
@@ -155,9 +157,10 @@ transcription or cancellation; only the message text is sent when you submit.
 
 ## Commands and skills
 
-Type `/` for commands or `$` to add a skill from the selected environment and
-provider. On mobile, both are also available before starting a thread on
-**New task**.
+Type `/` at the start of a message for commands, or `$` to add a skill from the
+selected environment and provider. A `/` typed after a space mid-message opens
+the skill list too. On mobile, these are also available before starting a
+thread on **New task**.
 
 The slash menu also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.

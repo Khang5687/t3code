@@ -24,7 +24,11 @@ const connectionsFrom = (allowedPeers: ReadonlyArray<string>) => {
   const server = new NodeEvents.EventEmitter() as unknown as NodeHttp.Server;
   const rejected: Array<string> = [];
   const destroyed: Array<string> = [];
-  guardPeerAllowlist(server, allowedPeers, (address) => rejected.push(address));
+  guardPeerAllowlist(
+    server,
+    () => allowedPeers,
+    (address) => rejected.push(address),
+  );
 
   return {
     rejected,

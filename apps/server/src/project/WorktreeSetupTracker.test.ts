@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ThreadId, WorktreeSetupSnapshot } from "@t3tools/contracts";
+import { ThreadId, WorktreeSetupSnapshot, worktreeSetupHandedOff } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -221,6 +221,33 @@ describe("WorktreeSetupTracker", () => {
       expect(snapshot?.error?.length).toBe(1000);
       // The wire schema must accept what the tracker publishes.
       expect(Schema.is(WorktreeSetupSnapshot)(snapshot)).toBe(true);
+    }),
+  );
+
+  it.effect("a fork's restore stage sits between its checkout and setup script", () =>
+    Effect.gen(function* () {
+      const tracker = yield* WorktreeSetupTracker.make;
+      yield* tracker.begin({
+        threadId,
+        branch: "t3/fork",
+        baseRef: "main",
+        stages: ["setup-script", "restore", "submodules", "checkout"],
+        fiber: null,
+      });
+      const stages = (yield* tracker.get(threadId))?.stages.map((stage) => stage.id);
+      expect(stages).toEqual(["checkout", "submodules", "restore", "setup-script"]);
+
+      // With no agent stage, the fork hands off once only its setup script is
+      // left running.
+      yield* tracker.stageStatus(threadId, "checkout", "done");
+      yield* tracker.stageStatus(threadId, "submodules", "skipped");
+      yield* tracker.stageStatus(threadId, "restore", "running");
+      const restoring = yield* tracker.get(threadId);
+      expect(restoring && worktreeSetupHandedOff(restoring)).toBe(false);
+      yield* tracker.stageStatus(threadId, "restore", "done");
+      yield* tracker.stageStatus(threadId, "setup-script", "running");
+      const settingUp = yield* tracker.get(threadId);
+      expect(settingUp && worktreeSetupHandedOff(settingUp)).toBe(true);
     }),
   );
 });

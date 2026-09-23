@@ -35,19 +35,22 @@ export function isThreadErrorBannerDismissedForSession(bannerKey: string | null)
 
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
+  variant = "error",
   onDismiss,
 }: {
   error: string | null;
+  /** `warning` for a failure the next send recovers from, such as a fork resume. */
+  variant?: "error" | "warning";
   onDismiss?: () => void;
 }) {
   if (!error) return null;
   return (
     <div className="pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
       <Alert
-        variant="error"
+        variant={variant}
         controlAlignment="first-line"
         className="alert-glass"
-        data-variant="error"
+        data-variant={variant}
       >
         <CircleAlertIcon />
         <AlertDescription>
@@ -61,7 +64,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
         {onDismiss && (
           <AlertAction>
             <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
-              <XIcon className="text-destructive" />
+              <XIcon className={variant === "warning" ? "text-warning" : "text-destructive"} />
             </Button>
           </AlertAction>
         )}

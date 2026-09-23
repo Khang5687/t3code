@@ -49,6 +49,8 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
+  latestTurnStartFailureId,
+  threadErrorIsForkResumeFailure,
   shouldRefocusComposerOnWindowFocus,
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
@@ -56,6 +58,7 @@ import {
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
   resolveBackgroundDraftWorkspaceOptions,
+  buildRestoredComposerAttachments,
   resolveComposerInteractionMode,
   restorePlanFollowUpComposer,
   resolveComposerProviderSelection,
@@ -2200,6 +2203,59 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   });
 });
 
+describe("fork resume failure", () => {
+  const userMessage = {
+    id: MessageId.make("fork-first-send"),
+    role: "user" as const,
+    text: "continue from here",
+    turnId: null,
+    createdAt: now,
+    updatedAt: now,
+    streaming: false,
+  };
+  const detail =
+    "Thread 'source' has no provider session left to resume. Your next send starts a fresh session from the forked transcript.";
+  const forkResumeFailed = {
+    id: EventId.make("fork-resume-failed"),
+    kind: "fork.resume.failed",
+    tone: "error" as const,
+    summary: "Fork could not resume the original session",
+    payload: { detail, requestId: userMessage.id },
+    turnId: null,
+    createdAt: now,
+  };
+
+  it("settles the local dispatch of the send that failed to resume", () => {
+    const beforeFailure = makeThread({ messages: [userMessage] });
+    const localDispatch = createLocalDispatchSnapshot(beforeFailure);
+    const afterFailure = makeThread({ messages: [userMessage], activities: [forkResumeFailed] });
+
+    const failureId = latestTurnStartFailureId(afterFailure, userMessage.id);
+    expect(failureId).toBe("fork-resume-failed");
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestTurn: null,
+        latestUserMessageId: userMessage.id,
+        session: null,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        latestTurnStartFailureId: failureId,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("marks the thread error as a fork resume failure only while it shows that failure", () => {
+    const activities = [forkResumeFailed];
+    expect(threadErrorIsForkResumeFailure(activities, detail)).toBe(true);
+    expect(threadErrorIsForkResumeFailure(activities, "Provider crashed")).toBe(false);
+    expect(threadErrorIsForkResumeFailure(activities, null)).toBe(false);
+    expect(threadErrorIsForkResumeFailure([], detail)).toBe(false);
+  });
+});
+
 describe("shouldRefocusComposerOnWindowFocus", () => {
   function element(
     tagName: string,
@@ -2605,5 +2661,37 @@ describe("worktree setup visibility", () => {
       ...settledDone,
       sequence: 9,
     });
+  });
+});
+
+describe("buildRestoredComposerAttachments", () => {
+  const message = {
+    id: MessageId.make("user-1"),
+    role: "user" as const,
+    text: "look at these",
+    turnId: TurnId.make("turn-1"),
+    createdAt: now,
+    updatedAt: now,
+    streaming: false,
+    attachments: [
+      { id: "a-1", type: "image" as const, name: "shot.png", mimeType: "image/png", sizeBytes: 3 },
+      { id: "a-2", type: "file" as const, name: "notes.txt", mimeType: "text/plain", sizeBytes: 5 },
+    ],
+  };
+
+  it("splits the fetched files the way the source message typed them", () => {
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:preview" });
+    const restored = buildRestoredComposerAttachments(
+      [
+        new File(["png"], "shot.png", { type: "image/png" }),
+        new File(["notes"], "notes.txt", { type: "text/plain" }),
+      ],
+      message,
+    );
+
+    expect(restored.images.map((image) => image.name)).toEqual(["shot.png"]);
+    expect(restored.images[0]?.previewUrl).toBe("blob:preview");
+    expect(restored.files.map((file) => file.name)).toEqual(["notes.txt"]);
+    vi.unstubAllGlobals();
   });
 });

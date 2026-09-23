@@ -8,7 +8,8 @@ import * as Stream from "effect/Stream";
 
 type LifecycleEventInput =
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "welcome" }>, "sequence">
-  | Omit<Extract<ServerLifecycleStreamEvent, { type: "ready" }>, "sequence">;
+  | Omit<Extract<ServerLifecycleStreamEvent, { type: "ready" }>, "sequence">
+  | Omit<Extract<ServerLifecycleStreamEvent, { type: "moved" }>, "sequence">;
 
 interface SnapshotState {
   readonly sequence: number;
@@ -39,10 +40,14 @@ const make = Effect.gen(function* () {
           ...event,
           sequence: nextSequence,
         } satisfies ServerLifecycleStreamEvent;
+        // `events` is the snapshot every new subscriber is replayed, so it
+        // holds only the events that describe the server as it stands. A move
+        // is a moment, not a state: retaining it would announce "the server
+        // moved" again on every later reconnect.
         const nextEvents =
-          nextEvent.type === "welcome"
-            ? [nextEvent, ...current.events.filter((entry) => entry.type !== "welcome")]
-            : [nextEvent, ...current.events.filter((entry) => entry.type !== "ready")];
+          nextEvent.type === "moved"
+            ? current.events
+            : [nextEvent, ...current.events.filter((entry) => entry.type !== nextEvent.type)];
         return [nextEvent, { sequence: nextSequence, events: nextEvents }] as const;
       }).pipe(Effect.tap((event) => PubSub.publish(pubsub, event))),
     snapshot: Ref.get(state),

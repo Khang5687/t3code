@@ -108,7 +108,9 @@ export function detectComposerTrigger(
       rangeStart: tokenStart,
       rangeEnd: cursor,
     };
-  const skillPrefix = /^\p{Sc}/u.exec(token);
+  // A currency sign opens the skill menu anywhere; so does `/` once the line-start
+  // branch above has had its chance, which is why only mid-prompt slashes land here.
+  const skillPrefix = /^[\p{Sc}/]/u.exec(token);
   if (skillPrefix) {
     return {
       kind: "skill",

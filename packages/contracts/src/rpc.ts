@@ -1389,7 +1389,15 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
 });
 
 const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    /**
+     * Whether this client understands `moved` events. Already-shipped clients
+     * decode the stream against the old event union and would die on an unknown
+     * member, so the server emits the move only to subscribers that ask for it.
+     * Absent on old clients; dropped by old servers.
+     */
+    serverMoved: Schema.optional(Schema.Boolean),
+  }),
   success: ServerLifecycleStreamEvent,
   error: EnvironmentAuthorizationError,
   stream: true,

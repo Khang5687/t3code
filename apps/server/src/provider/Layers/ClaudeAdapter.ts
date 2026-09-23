@@ -5581,6 +5581,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // `rollbackThread` forks the resumed session with the SDK's `forkSession`.
+      supportsForkResume: true,
     },
     compaction: { type: "slash-command", command: "/compact" },
     startSession,

@@ -40,6 +40,7 @@ import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
 import * as DesktopBackendConfiguration from "./backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "./backend/DesktopBackendPool.ts";
+import * as DesktopListenRebindHttp from "./backend/DesktopListenRebindHttp.ts";
 import * as DesktopLocalEnvironmentAuth from "./backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopNetworkInterfaces from "./backend/DesktopNetworkInterfaces.ts";
 import * as DesktopEnvironment from "./app/DesktopEnvironment.ts";
@@ -190,6 +191,12 @@ const desktopLocalEnvironmentAuthLayer = DesktopLocalEnvironmentAuth.layer.pipe(
   Layer.provideMerge(desktopBackendLayer),
 );
 
+// Sits above the backend because it calls it over loopback HTTP, while
+// DesktopServerExposure (which asks for the move) sits below it.
+const desktopListenRebindLayer = DesktopListenRebindHttp.layer.pipe(
+  Layer.provideMerge(desktopLocalEnvironmentAuthLayer),
+);
+
 const desktopApplicationLayer = Layer.mergeAll(
   DesktopLifecycle.layer,
   desktopAppActivationLayer,
@@ -201,7 +208,7 @@ const desktopApplicationLayer = Layer.mergeAll(
   Layer.provideMerge(desktopSnapShotLayer),
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(desktopWslBackendLayer),
-  Layer.provideMerge(desktopLocalEnvironmentAuthLayer),
+  Layer.provideMerge(desktopListenRebindLayer),
 );
 
 const desktopClerkLayer = DesktopClerk.layer.pipe(

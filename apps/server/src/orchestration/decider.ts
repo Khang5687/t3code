@@ -1,11 +1,13 @@
 import {
   EventId,
+  FORK_HISTORY_MESSAGE_PREFIX,
   MAX_SCRIPT_ID_LENGTH,
   SCRIPT_RUN_COMMAND_PATTERN,
   MessageId,
   ThreadLinkedPullRequest,
   UserInputRequestedPayload,
   isImportedAgentSessionMessageId,
+  resolveForkBoundary,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -485,6 +487,166 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.fork": {
+      const source = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      if (source.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.sourceThreadId}' is deleted and cannot be forked.`,
+        });
+      }
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const boundary = resolveForkBoundary(source.messages, command.messageId);
+      if (!boundary) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.messageId}' is not a user message on thread '${command.sourceThreadId}'.`,
+        });
+      }
+      // A new-worktree fork starts with no workspace: the transport checks
+      // one out after this lands and points the fork at it with
+      // `thread.meta.update`. It never inherits the source's.
+      const sharesWorkspace = command.location === "same-workspace";
+      // The boundary message is left behind: clients put its text and
+      // attachments in the fork's composer, the way Edit from here does.
+      const copiedMessages = source.messages.slice(0, boundary.index);
+      const events: Array<PlannedOrchestrationEvent> = [
+        {
+          // Fork events are copied history, not live traffic. The marker the
+          // session importer already uses keeps the checkpoint reactor and the
+          // agent-awareness relay out of a fork.
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+            metadata: { historyImport: true },
+          })),
+          type: "thread.created",
+          payload: {
+            threadId: command.threadId,
+            projectId: source.projectId,
+            title: `${source.title} (fork)`,
+            modelSelection: source.modelSelection,
+            runtimeMode: source.runtimeMode,
+            interactionMode: source.interactionMode,
+            // Same workspace: the fork shares the source's files untouched.
+            branch: sharesWorkspace ? source.branch : null,
+            worktreePath: sharesWorkspace ? source.worktreePath : null,
+            forkedFrom: {
+              threadId: source.id,
+              turnCount: boundary.turnCount,
+              title: source.title,
+              // No provider is touched here, so forking stays instant. The
+              // fork's first send resolves the session from this marker.
+              sessionResolution: "resumeFromSource",
+            },
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
+      for (const [index, message] of copiedMessages.entries()) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: message.createdAt,
+            commandId: command.commandId,
+            metadata: { historyImport: true },
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            // Fresh ids: the fork is a separate aggregate, and two threads
+            // must never claim the same message id. The `import:` namespace is
+            // how this codebase marks copied history that no turn in this
+            // thread produced, and four guards depend on it: the copies are
+            // excluded from `latestUserMessageAt`, survive a conversation
+            // revert, do not read as a queued turn, and cannot be replayed as
+            // a turn's own message.
+            messageId: MessageId.make(
+              `${FORK_HISTORY_MESSAGE_PREFIX}${command.commandId}:${index}`,
+            ),
+            role: message.role,
+            text: message.text,
+            ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            ...(message.context !== undefined ? { context: message.context } : {}),
+            // The copy is frozen history; the fork has no turns of its own yet.
+            turnId: null,
+            streaming: false,
+            createdAt: message.createdAt,
+            updatedAt: message.createdAt,
+          },
+        });
+      }
+      // Settled at fork time, not at the last copied message: the fork is a
+      // brand-new thread and must sort by when the user made it.
+      events.push({
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: { historyImport: true },
+        })),
+        type: "thread.settled",
+        payload: {
+          threadId: command.threadId,
+          settledAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      });
+      return events;
+    }
+
+    case "thread.fork-session.resolve": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const forkedFrom = thread.forkedFrom;
+      if (forkedFrom == null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a fork and has no session marker to resolve.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          // The turn that resolved the session, so the fork's other events for
+          // that turn share one timestamp.
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        // Reuses the metadata event: the marker lives inside `forkedFrom`, so
+        // it needs no event type, column or migration of its own.
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          forkedFrom: {
+            ...forkedFrom,
+            // Absent means resolved: the fork owns an ordinary session now.
+            // Spelled out so a later field on the origin record survives the
+            // rewrite while this one is genuinely dropped.
+            sessionResolution: command.resolution,
+          },
           updatedAt: command.createdAt,
         },
       };

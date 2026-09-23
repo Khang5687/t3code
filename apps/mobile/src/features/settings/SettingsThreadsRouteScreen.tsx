@@ -6,8 +6,9 @@ import { useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_AFTER_FORK, DEFAULT_SERVER_SETTINGS, type AfterFork } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
+import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
@@ -46,6 +47,7 @@ export function SettingsThreadsRouteScreen() {
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
           <AutoSettleSettingsRows />
+          <AfterForkSection />
           <LegacySettingsSection />
         </ScrollView>
       </SettingsScreen>
@@ -225,6 +227,75 @@ function AutoSettleSettingsRows() {
           </View>
         </SettingsSection>
       ) : null}
+    </View>
+  );
+}
+
+const AFTER_FORK_OPTIONS: ReadonlyArray<{
+  readonly value: AfterFork;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    value: "open",
+    label: "Open the fork",
+    description: "Go straight to the new thread with the message in its composer.",
+  },
+  {
+    value: "stay",
+    label: "Stay on the source",
+    description: "Keep reading this thread. A notification opens the fork.",
+  },
+];
+
+/**
+ * Device-local counterpart of web's Settings → General → After forking. Mobile
+ * has no client-settings sync, so the choice lives in mobile preferences.
+ */
+function AfterForkSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  const selected = AsyncResult.isSuccess(preferences)
+    ? (preferences.value.afterFork ?? DEFAULT_AFTER_FORK)
+    : null;
+
+  return (
+    <View className="gap-3">
+      <SettingsSection title="After forking">
+        {AFTER_FORK_OPTIONS.map((option, index) => (
+          <Pressable
+            key={option.value}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: selected === option.value, disabled: !ready }}
+            disabled={!ready}
+            onPress={() => savePreferences({ afterFork: option.value })}
+            className={cn(
+              "flex-row items-center gap-4 p-4",
+              index === 0 ? undefined : "border-t border-border-subtle",
+            )}
+          >
+            <View className="min-w-0 flex-1 gap-1">
+              <Text className="text-lg text-foreground">{option.label}</Text>
+              <Text className="text-sm leading-normal text-foreground-muted">
+                {option.description}
+              </Text>
+            </View>
+            {selected === option.value ? (
+              <SymbolView
+                name="checkmark"
+                size={18}
+                tintColorClassName="accent-icon"
+                type="monochrome"
+                weight="semibold"
+              />
+            ) : null}
+          </Pressable>
+        ))}
+      </SettingsSection>
+      <Text className="px-2 text-sm text-foreground-muted">
+        Applies to this device only. Forking branches a thread from one of its past messages.
+      </Text>
     </View>
   );
 }

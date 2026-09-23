@@ -961,7 +961,7 @@ import {
   buildComposerPromptHistoryEntries,
   stepComposerPromptHistory,
   type ComposerPromptHistoryPosition,
-} from "./composerPromptHistory";
+} from "@t3tools/client-runtime/composer-prompt-history";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import type { ContextWindowSnapshot } from "../../lib/contextWindow";
@@ -2539,7 +2539,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         exactPullRequestLookup.isPending));
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
-      return "No skills found. Try / to browse provider commands.";
+      return "No skills found. Start a message with / to browse provider commands.";
     }
     if (composerTriggerKind === "pull-request") {
       if (pullRequestProjectId === null || pullRequestRepository === null) {

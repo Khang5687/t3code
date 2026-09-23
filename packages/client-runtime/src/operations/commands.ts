@@ -32,6 +32,7 @@ export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
 export type CreateThreadInput = CommandInput<"thread.create">;
+export type ForkThreadInput = CommandInput<"thread.fork">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
 export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
@@ -134,6 +135,20 @@ export const createThread: (input: CreateThreadInput) => CommandEffect = Effect.
   return yield* dispatch({
     ...input,
     type: "thread.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+/** Branches `sourceThreadId` at `messageId` into the new, client-minted
+ *  `threadId`. Title, model and workspace come from the source server-side. */
+export const forkThread: (input: ForkThreadInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.forkThread",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.fork",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

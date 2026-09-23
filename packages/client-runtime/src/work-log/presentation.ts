@@ -24,6 +24,31 @@ export function isWorktreeSetupActivity(kind: string): boolean {
   );
 }
 
+/**
+ * Written when a fork's first send could not resume the source's provider
+ * session. The send did not start a turn, but the server has already switched
+ * the fork to a fresh session seeded from its transcript and says so in
+ * `payload.detail`, so the next ordinary send recovers.
+ */
+export const FORK_RESUME_FAILED_KIND = "fork.resume.failed";
+
+/** Activities that end a send without starting a turn, which settles the composer. */
+export function isTurnStartFailureActivityKind(kind: string): boolean {
+  return kind === "provider.turn.start.failed" || kind === FORK_RESUME_FAILED_KIND;
+}
+
+/** Rows both clients draw with the warning treatment instead of a failure mark.
+ *  A fork resume failure keeps its error tone so it stays a standalone row, but
+ *  the next send recovers, so it is not shown as a failed tool call. */
+export function workEntrySignalsWarning(
+  entry: Pick<WorkLogPresentationEntry, "sourceActivityKind">,
+): boolean {
+  return (
+    entry.sourceActivityKind === "runtime.warning" ||
+    entry.sourceActivityKind === FORK_RESUME_FAILED_KIND
+  );
+}
+
 export type WorkLogToolLifecycleStatus = RuntimeItemStatus | "stopped";
 
 export interface WorkLogPresentationEntry {

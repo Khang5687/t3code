@@ -587,6 +587,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
         ? ["Follow-up behavior"]
         : []),
+      ...(settings.afterFork !== DEFAULT_UNIFIED_SETTINGS.afterFork ? ["After forking"] : []),
       ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
         ? ["Context window indicator"]
         : []),
@@ -648,6 +649,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.composerRichTextEnabled,
       settings.sendShortcut,
       settings.followUpBehavior,
+      settings.afterFork,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -763,6 +765,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
+      afterFork: DEFAULT_UNIFIED_SETTINGS.afterFork,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -2721,6 +2724,37 @@ export function GeneralSettingsPanel() {
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem value="queue">Queue</SelectItem>
                 <SelectItem value="steer">Steer</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("after-fork")}
+          description="Where you land after forking a thread from one of its messages. Staying on the source shows a notification that opens the fork."
+          resetAction={
+            settings.afterFork !== DEFAULT_UNIFIED_SETTINGS.afterFork ? (
+              <SettingResetButton
+                label="after forking"
+                onClick={() => updateSettings({ afterFork: DEFAULT_UNIFIED_SETTINGS.afterFork })}
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.afterFork}
+              onValueChange={(value) => {
+                if (value === "open" || value === "stay") updateSettings({ afterFork: value });
+              }}
+            >
+              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="After forking">
+                <SelectValue>
+                  {settings.afterFork === "stay" ? "Stay on the source" : "Open the fork"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="open">Open the fork (default)</SelectItem>
+                <SelectItem value="stay">Stay on the source</SelectItem>
               </SelectPopup>
             </Select>
           }

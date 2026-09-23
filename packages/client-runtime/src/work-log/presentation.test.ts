@@ -5,6 +5,8 @@ import { ThreadId } from "@t3tools/contracts";
 import {
   commandDetailRepeatsCommand,
   extractCommandOutputText,
+  isTurnStartFailureActivityKind,
+  workEntrySignalsWarning,
   resolveViewedImageAsset,
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
@@ -708,5 +710,26 @@ describe("device group summaries", () => {
         },
       ]),
     ).toBe("Used 1 tool");
+  });
+});
+
+describe("fork resume failure row", () => {
+  it("shows as a warning, unlike an ordinary provider failure", () => {
+    const entry: WorkLogPresentationEntry = {
+      label: "Fork could not resume the original session",
+      tone: "error",
+      sourceActivityKind: "fork.resume.failed",
+    };
+    expect(workEntrySignalsWarning(entry)).toBe(true);
+    expect(workEntrySignalsWarning({ sourceActivityKind: "runtime.warning" })).toBe(true);
+    expect(workEntrySignalsWarning({ sourceActivityKind: "provider.turn.start.failed" })).toBe(
+      false,
+    );
+  });
+
+  it("counts as a turn-start failure for the composer", () => {
+    expect(isTurnStartFailureActivityKind("fork.resume.failed")).toBe(true);
+    expect(isTurnStartFailureActivityKind("provider.turn.start.failed")).toBe(true);
+    expect(isTurnStartFailureActivityKind("checkpoint.revert.failed")).toBe(false);
   });
 });

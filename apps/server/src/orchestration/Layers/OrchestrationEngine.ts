@@ -235,6 +235,23 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
         }
 
+        // Command snapshots carry no thread messages at startup, and cap them
+        // at 2000 while running. A fork's boundary and the history it copies
+        // both live in the source's durable projection, so read that instead of
+        // trusting whatever this process happens to have replayed.
+        if (envelope.command.type === "thread.fork") {
+          const sourceThreadId = envelope.command.sourceThreadId;
+          const source = yield* projectionSnapshotQuery.getThreadDetailById(sourceThreadId);
+          if (Option.isSome(source)) {
+            commandReadModel = {
+              ...commandReadModel,
+              threads: commandReadModel.threads.map((entry) =>
+                entry.id === sourceThreadId ? { ...entry, messages: source.value.messages } : entry,
+              ),
+            };
+          }
+        }
+
         // Command snapshots omit activities at startup and cap them while running.
         // Read this request's durable state before deciding how to send the answer.
         const userInputActivity =

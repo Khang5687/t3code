@@ -1,7 +1,11 @@
 import { listenInterfacesForPreset, normalizeListenInterfaces } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { rebindSelection, widensExposure } from "./ExposureSettings.logic";
+import {
+  formatExposureApplyError,
+  rebindSelection,
+  widensExposure,
+} from "./ExposureSettings.logic";
 
 const selection = (
   kinds: Parameters<typeof normalizeListenInterfaces>[0]["kinds"],
@@ -97,5 +101,24 @@ describe("rebindSelection", () => {
         addresses: ["10.0.0.5"],
       }),
     ).toEqual({ kinds: ["loopback"], addresses: ["10.0.0.5"] });
+  });
+
+  it("shows the backend's own wording for a refused rebind, not the IPC wrapper", () => {
+    expect(
+      formatExposureApplyError(
+        new Error(
+          "Error invoking remote method 'desktop:set-server-listen-interfaces': " +
+            "DesktopListenRebindFailedError: Could not bind 192.168.1.20:3773 (EADDRINUSE); " +
+            "the server is still on its previous addresses.",
+        ),
+      ),
+    ).toBe(
+      "Could not bind 192.168.1.20:3773 (EADDRINUSE); the server is still on its previous addresses.",
+    );
+  });
+
+  it("falls back when the rejection carries nothing readable", () => {
+    expect(formatExposureApplyError("boom")).toBe("Failed to update exposure.");
+    expect(formatExposureApplyError(new Error("   "))).toBe("Failed to update exposure.");
   });
 });

@@ -27,6 +27,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
+import * as DesktopListenRebind from "./DesktopListenRebind.ts";
 import * as DesktopNetworkInterfaces from "./DesktopNetworkInterfaces.ts";
 import {
   resolveDesktopExposure,
@@ -175,6 +176,7 @@ export class DesktopTailscaleServePersistenceError extends Schema.TaggedError<De
 export const DesktopServerExposureSetModeError = Schema.Union([
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
+  DesktopListenRebind.DesktopListenRebindFailedError,
 ]);
 export type DesktopServerExposureSetModeError = typeof DesktopServerExposureSetModeError.Type;
 
@@ -213,12 +215,25 @@ export class DesktopServerExposure extends Context.Service<
     readonly configureFromSettings: (input: {
       readonly port: number;
     }) => Effect.Effect<DesktopServerExposureState>;
+    /**
+     * The rebind service is a requirement rather than a layer dependency: it
+     * reaches the backend, and the backend's layers are built on top of this
+     * one. The IPC runtime holds both, so the handlers satisfy it.
+     */
     readonly setListenInterfaces: (
       listenInterfaces: ListenInterfacesInput,
-    ) => Effect.Effect<DesktopServerExposureChange, DesktopServerExposureSetModeError>;
+    ) => Effect.Effect<
+      DesktopServerExposureChange,
+      DesktopServerExposureSetModeError,
+      DesktopListenRebind.DesktopListenRebind
+    >;
     readonly setMode: (
       mode: DesktopServerExposureMode,
-    ) => Effect.Effect<DesktopServerExposureChange, DesktopServerExposureSetModeError>;
+    ) => Effect.Effect<
+      DesktopServerExposureChange,
+      DesktopServerExposureSetModeError,
+      DesktopListenRebind.DesktopListenRebind
+    >;
     readonly setTailscaleServeEnabled: (input: {
       readonly enabled: boolean;
       readonly port?: number;
@@ -298,13 +313,6 @@ const toBackendConfig = (state: RuntimeState): DesktopServerExposureBackendConfi
   tailscaleServePort: state.tailscaleServePort,
 });
 
-/** Exposure is bind-time state: the selection only takes effect on a fresh backend. */
-const requiresBackendRelaunch = (previous: RuntimeState, next: RuntimeState): boolean =>
-  previous.port !== next.port ||
-  // Set inequality on kinds or addresses, not a difference in spelling.
-  !listenInterfacesEqual(previous.resolution.requested, next.resolution.requested) ||
-  previous.localHttpUrl !== next.localHttpUrl;
-
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
@@ -369,7 +377,29 @@ export const make = Effect.gen(function* () {
       return yield* new DesktopServerExposureNoNetworkAddressError({ port: previous.port });
     }
 
-    const change = yield* desktopSettings.setListenInterfaces(next.resolution.requested).pipe(
+    // The backend moves first (ADR 0003, Amendment 1). A refused bind leaves it
+    // on the previous set, so neither the persisted selection nor the runtime
+    // state may move either. Set equality, not spelling: a reorder binds
+    // nothing new and is not worth a round trip.
+    if (!listenInterfacesEqual(previous.resolution.requested, next.resolution.requested)) {
+      const listenRebind = yield* DesktopListenRebind.DesktopListenRebind;
+      // The result's addresses and warnings are deliberately dropped: the
+      // panel reads the desktop's own resolution so that a live change and a
+      // restart describe the selection the same way. The backend's answer
+      // differs only where it resolves against different interfaces, which is
+      // the WSL gap ADR 0003 already records.
+      yield* listenRebind.rebind({
+        httpBaseUrl: previous.httpBaseUrl,
+        listenInterfaces: next.resolution.requested,
+      });
+    }
+
+    // Ahead of the write, because from here on the new set is what is actually
+    // bound: a failing settings file must not leave `backendConfig` handing the
+    // old selection to the next start.
+    yield* Ref.set(stateRef, next);
+
+    yield* desktopSettings.setListenInterfaces(next.resolution.requested).pipe(
       Effect.mapError(
         (cause) =>
           new DesktopServerExposureModePersistenceError({
@@ -379,11 +409,9 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-    yield* Ref.set(stateRef, next);
-    return {
-      state: toContractState(next),
-      requiresRelaunch: change.changed || requiresBackendRelaunch(previous, next),
-    };
+    // The listener set moved in place; nothing about this change needs a
+    // fresh process.
+    return { state: toContractState(next), requiresRelaunch: false };
   });
 
   const setMode = Effect.fn("desktop.serverExposure.setMode")(function* (

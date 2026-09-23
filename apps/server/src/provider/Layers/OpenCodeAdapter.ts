@@ -4030,6 +4030,8 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        // `rollbackThread` rewinds a `session.fork` copy, never the session itself.
+        supportsForkResume: true,
       },
       startSession,
       sendTurn,

@@ -250,6 +250,18 @@ export const resolveListenAddress = (
   };
 };
 
+/**
+ * The resolution the server launched with, and it stays that way on purpose.
+ *
+ * A live rebind (ADR 0003, Amendment 1) moves the listening sockets while the
+ * process runs, so the *bound* set can drift from this one. That is not a bug
+ * left to fix: `EnvironmentAuthPolicy`, `SessionStore`, `EnvironmentAuth`,
+ * `startupAccess` and `serverRuntimeStartup` all read this service, and
+ * reissuing credentials or flipping the auth policy under a running client is
+ * explicitly out of scope for the rebind. The live reading of the selection
+ * lives in the listener set (`listenRebind.ts`), which is also what rewrites
+ * the persisted runtime state after a move.
+ */
 export class ListenAddress extends Context.Service<ListenAddress, ResolvedListenAddress>()(
   "t3/listenAddress",
 ) {}

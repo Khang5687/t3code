@@ -3,7 +3,6 @@ import {
   DesktopServerExposureModeSchema,
   DesktopServerExposureStateSchema,
   ListenInterfaces,
-  formatListenInterfaces,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -33,30 +32,25 @@ export const setServerExposureMode = DesktopIpc.makeIpcMethod({
   payload: DesktopServerExposureModeSchema,
   result: DesktopServerExposureStateSchema,
   handler: Effect.fn("desktop.ipc.serverExposure.setMode")(function* (mode) {
-    const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const change = yield* serverExposure.setMode(mode);
-    if (change.requiresRelaunch) {
-      yield* lifecycle.relaunch(`serverExposureMode=${mode}`);
-    }
     return change.state;
   }),
 });
 
+/**
+ * The backend rebinds in place (ADR 0003, Amendment 1), so a selection change
+ * relaunches nothing: a refused bind comes back as a typed error the panel
+ * renders, with the old selection still bound and still persisted.
+ */
 export const setServerListenInterfaces = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SET_SERVER_LISTEN_INTERFACES_CHANNEL,
   payload: ListenInterfaces,
   result: DesktopServerExposureStateSchema,
   handler: Effect.fn("desktop.ipc.serverExposure.setListenInterfaces")(
     function* (listenInterfaces) {
-      const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
       const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
       const change = yield* serverExposure.setListenInterfaces(listenInterfaces);
-      if (change.requiresRelaunch) {
-        yield* lifecycle.relaunch(
-          `listenInterfaces=${formatListenInterfaces(change.state.listenInterfaces)}`,
-        );
-      }
       return change.state;
     },
   ),

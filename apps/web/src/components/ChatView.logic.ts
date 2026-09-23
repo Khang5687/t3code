@@ -27,6 +27,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
+  FORK_RESUME_FAILED_KIND,
+  isTurnStartFailureActivityKind,
+} from "@t3tools/client-runtime/work-log/presentation";
+import {
   appendCodexArtifactTemplateUsePrompt,
   codexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
@@ -39,11 +43,16 @@ import {
   type ThreadShell,
   type TurnDiffSummary,
 } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import {
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+  type DraftThreadState,
+} from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadDetails } from "../state/threads";
 import { stripInlineContextReferences } from "~/lib/composerContextReferences";
+import { randomUUID } from "~/lib/utils";
 import { filterTerminalContextsWithText, type TerminalContextDraft } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 import { collapseExpandedComposerCursor, type ComposerSubmissionIntent } from "../composer-logic";
@@ -257,7 +266,9 @@ export function toolGroupConsumesUpwardNavigation(target: EventTarget | null): b
 
 export {
   findRecordedWorktreeSetup,
+  isOwnUserMessage,
   resolveVisibleWorktreeSetup,
+  strandedForkSendBlockReason,
 } from "@t3tools/client-runtime/worktree-setup";
 
 export function resolveDraftHeroState(input: {
@@ -788,6 +799,35 @@ export async function prepareRevertedMessageAttachments(input: {
   );
 }
 
+/**
+ * Turn the files `prepareRevertedMessageAttachments` fetched back into composer
+ * attachments, split the way the draft store stores them. The source message
+ * decides which side each file lands on, because a `File` has already lost the
+ * distinction the timeline drew.
+ */
+export function buildRestoredComposerAttachments(
+  files: ReadonlyArray<File>,
+  message: ChatMessage,
+): { images: ComposerImageAttachment[]; files: ComposerFileAttachment[] } {
+  const images: ComposerImageAttachment[] = [];
+  const restoredFiles: ComposerFileAttachment[] = [];
+  files.forEach((file, index) => {
+    const attachment = {
+      id: randomUUID(),
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+    };
+    if (message.attachments?.[index]?.type === "image") {
+      images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
+    } else {
+      restoredFiles.push({ ...attachment, type: "file" });
+    }
+  });
+  return { images, files: restoredFiles };
+}
+
 export function revokeUserMessagePreviewUrls(message: ChatMessage): void {
   if (message.role !== "user" || !message.attachments) {
     return;
@@ -1111,15 +1151,25 @@ export function getStartedThreadModelChangeBlockReason(input: {
   };
 }
 
-export async function waitForStartedServerThread(
+/** A thread the client knows about, whether or not it has run anything. */
+export const serverThreadExists = (thread: Thread | null | undefined): boolean => thread != null;
+
+/**
+ * Resolves once the routed thread satisfies `isReady`, so a navigation does not
+ * land on a thread the client has not seen yet. Forks pass
+ * `serverThreadExists`: a fork taken at the first message copies no history, so
+ * waiting for it to have started would only ever time out.
+ */
+export async function waitForServerThread(
   threadRef: ScopedThreadRef,
   timeoutMs = 1_000,
+  isReady: (thread: Thread | null | undefined) => boolean = threadHasStarted,
 ): Promise<boolean> {
   const threadAtom = environmentThreadDetails.detailAtom(threadRef);
   const getThread = () => appAtomRegistry.get(threadAtom);
   const thread = getThread();
 
-  if (threadHasStarted(thread)) {
+  if (isReady(thread)) {
     return true;
   }
 
@@ -1139,13 +1189,13 @@ export async function waitForStartedServerThread(
     };
 
     const unsubscribe = appAtomRegistry.subscribe(threadAtom, (thread) => {
-      if (!threadHasStarted(thread)) {
+      if (!isReady(thread)) {
         return;
       }
       finish(true);
     });
 
-    if (threadHasStarted(getThread())) {
+    if (isReady(getThread())) {
       finish(true);
       return;
     }
@@ -1252,7 +1302,7 @@ export function latestTurnStartFailureId(
   if (latestUserMessageId === null) return null;
   return (
     activeThread?.activities.findLast((activity) => {
-      if (activity.kind !== "provider.turn.start.failed") return false;
+      if (!isTurnStartFailureActivityKind(activity.kind)) return false;
       const payload =
         typeof activity.payload === "object" && activity.payload !== null
           ? (activity.payload as { readonly requestId?: unknown })
@@ -1260,6 +1310,21 @@ export function latestTurnStartFailureId(
       return payload?.requestId === latestUserMessageId;
     })?.id ?? null
   );
+}
+
+/** A fork resume failure is recoverable, so its thread banner is a warning.
+ *  The server writes the same text to `session.lastError` and the activity. */
+export function threadErrorIsForkResumeFailure(
+  activities: Thread["activities"],
+  error: string | null,
+): boolean {
+  if (error === null) return false;
+  const activity = activities.findLast((candidate) => candidate.kind === FORK_RESUME_FAILED_KIND);
+  const payload =
+    typeof activity?.payload === "object" && activity.payload !== null
+      ? (activity.payload as { readonly detail?: unknown })
+      : null;
+  return payload?.detail === error;
 }
 
 export function createLocalDispatchSnapshot(

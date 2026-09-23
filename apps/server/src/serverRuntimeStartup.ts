@@ -14,6 +14,7 @@ import {
   WORKTREE_SETUP_ACTIVITY_KIND,
   WorktreeSetupSnapshot,
   worktreeSetupActivityId,
+  worktreeSetupHandedOff,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
@@ -746,8 +747,9 @@ const decodeWorktreeSetupSnapshot = Schema.decodeUnknownOption(WorktreeSetupSnap
  * and settles it when it finishes. The bootstrap itself lives only in memory,
  * so a process exit mid-setup leaves a `running` record with nobody to finish
  * it. Before the turn started that also strands the persisted user message, so
- * the setup is marked failed and the user is told to send again. After the
- * handoff only an async setup script was still running; its stage is marked
+ * the setup is marked failed and the user is told to send again; a fork is
+ * told to fork again. After the handoff only an async setup script was still
+ * running; its stage is marked
  * failed and the setup settles as done, like any other script failure.
  */
 export const reconcileWorktreeSetups = Effect.gen(function* () {
@@ -765,16 +767,19 @@ export const reconcileWorktreeSetups = Effect.gen(function* () {
     if (recorded.id !== worktreeSetupActivityId(snapshot.value.threadId)) continue;
     const threadId = snapshot.value.threadId;
 
-    const turnStarted = snapshot.value.stages.some(
-      (stage) => stage.id === "agent" && stage.status === "done",
-    );
+    // A fork has no agent stage and no message to resend; its checkout is
+    // simply gone, so it is deleted and forked again.
+    const isFork = !snapshot.value.stages.some((stage) => stage.id === "agent");
+    const turnStarted = worktreeSetupHandedOff(snapshot.value);
     const interrupted: WorktreeSetupSnapshot = {
       ...snapshot.value,
       phase: turnStarted ? "done" : "failed",
       endedAt: interruptedAt,
       error: turnStarted
         ? null
-        : "The server restarted before the worktree setup finished. Send the message again.",
+        : isFork
+          ? "The server restarted before the fork's worktree was ready. Fork again."
+          : "The server restarted before the worktree setup finished. Send the message again.",
       stages: snapshot.value.stages.map((stage) =>
         stage.status === "running" || stage.status === "pending"
           ? {

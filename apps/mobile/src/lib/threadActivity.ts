@@ -29,6 +29,7 @@ import {
   toolGroupSummaryKind,
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
+  workEntrySignalsWarning,
   workLogEntryIsToolLike,
   type ToolGroupSummaryKind,
   type WorkLogToolLifecycleStatus,
@@ -945,7 +946,7 @@ function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
         return "neutral";
     }
   }
-  if (!workLogEntryIsToolLike(entry)) {
+  if (!workLogEntryIsToolLike(entry) || workEntrySignalsWarning(entry)) {
     return null;
   }
   if (workEntryIndicatesToolFailure(entry)) {
@@ -966,7 +967,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   ) {
     return "message";
   }
-  if (entry.sourceActivityKind === "runtime.warning") return "warning";
+  if (workEntrySignalsWarning(entry)) return "warning";
   if (entry.toolSurface) return entry.toolSurface;
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";

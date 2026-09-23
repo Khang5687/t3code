@@ -27,6 +27,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
+    agentsPanelSort: "status",
     ...overrides,
   };
 }
@@ -159,6 +160,12 @@ describe("uiStateStore pure functions", () => {
 });
 
 describe("parsePersistedState", () => {
+  it("hydrates the Agents panel sort and falls back when the stored value is unknown", () => {
+    expect(parsePersistedState({ agentsPanelSort: "tokens" }).agentsPanelSort).toBe("tokens");
+    expect(parsePersistedState({ agentsPanelSort: "by-vibes" }).agentsPanelSort).toBe("status");
+    expect(parsePersistedState({}).agentsPanelSort).toBe("status");
+  });
+
   it("hydrates the last selected pull request merge method", () => {
     const parsed = parsePersistedState({
       pullRequestMergeMethod: "squash",
@@ -203,6 +210,7 @@ describe("parsePersistedState", () => {
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
       pullRequestMergeMethod: "merge",
+      agentsPanelSort: "status",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -332,10 +340,21 @@ describe("uiStateStore persistence", () => {
         },
       },
       pullRequestMergeMethod: "merge",
+      agentsPanelSort: "status",
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,
     });
+  });
+
+  it("restores the Agents panel sort across reloads", () => {
+    persistState(makeUiState({ agentsPanelSort: "name" }));
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+
+    expect(parsePersistedState(persisted).agentsPanelSort).toBe("name");
   });
 
   it("restores the sidebar project scope across reloads", () => {

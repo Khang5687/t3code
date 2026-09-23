@@ -3196,8 +3196,7 @@ export function ConnectionsSettings() {
             }
           />
           <TooltipPopup side="top">
-            Network exposure changes restart the backend and must be controlled where the server
-            process is launched.
+            Network exposure must be controlled where the server process is launched.
           </TooltipPopup>
         </Tooltip>
       }

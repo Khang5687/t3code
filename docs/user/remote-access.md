@@ -38,8 +38,9 @@ On a desktop host, open **Settings → Connections** and set **Exposure** to the
 preset you want: **Tailscale only** for your tailnet, **LAN** for the local
 network as well, or **Custom** to pick interfaces and type in addresses. Then
 create a pairing link using an address the other device can reach. Applying a
-preset restarts the desktop app, and widening one asks first. **Local only**
-takes it all back.
+preset takes effect right away and leaves running agents alone, though a device
+on an address you dropped has to reconnect on one you kept. Widening a preset
+asks first. **Local only** takes it all back.
 
 For a command-line host, name the interfaces to serve on. `tailnet` picks the
 host's Tailscale address and `lan` its local network address, so you do not have

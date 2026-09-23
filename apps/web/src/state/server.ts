@@ -4,6 +4,7 @@ import {
   type EnvironmentTheme,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type ServerLifecycleMovedPayload,
   type ServerLifecycleWelcomePayload,
   type ServerProvider,
   type ServerSettings,
@@ -80,6 +81,16 @@ export const primaryServerConfigEventAtom = Atom.make(
 export const primaryServerWelcomeAtom = Atom.make(
   (get): ServerLifecycleWelcomePayload | null => get(primaryServerStateAtom).welcome,
 ).pipe(Atom.withLabel("web-primary-server-welcome"));
+
+/**
+ * The last move the primary environment announced, or null while it has stayed
+ * put. Only the primary environment: this is the server the page itself is
+ * served from, so it is the only one whose move can take the client with it.
+ */
+export const primaryServerMovedAtom = Atom.make((get): ServerLifecycleMovedPayload | null => {
+  const environmentId = get(primaryEnvironmentIdAtom);
+  return environmentId === null ? null : get(serverEnvironment.movedAtom(environmentId));
+}).pipe(Atom.withLabel("web-primary-server-moved"));
 
 export const primaryServerSettingsAtom = Atom.make(
   (get): ServerSettings => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,

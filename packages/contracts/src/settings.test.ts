@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { DEFAULT_PXPIPE_SIDECAR_PORT } from "./sidecar.ts";
 import {
+  afterForkAction,
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
@@ -299,6 +300,29 @@ describe("ClientSettings diff colors", () => {
   it("rejects unsupported palettes", () => {
     expect(() => decodeClientSettings({ diffColorScheme: "purple-yellow" })).toThrow();
     expect(() => decodeClientSettingsPatch({ diffColorScheme: "purple-yellow" })).toThrow();
+  });
+});
+
+describe("afterFork", () => {
+  it("opens the fork for a device that never chose", () => {
+    expect(decodeClientSettings({}).afterFork).toBe("open");
+    expect(afterForkAction(undefined)).toBe("navigate");
+  });
+
+  it("navigates on open and notifies on stay", () => {
+    expect(afterForkAction("open")).toBe("navigate");
+    expect(afterForkAction("stay")).toBe("notify");
+  });
+
+  it.each(["open", "stay"])("round-trips %s", (afterFork) => {
+    const settings = decodeClientSettings({ afterFork });
+    expect(encodeClientSettings(settings).afterFork).toBe(afterFork);
+    expect(decodeClientSettingsPatch({ afterFork }).afterFork).toBe(afterFork);
+  });
+
+  it("rejects an unsupported choice", () => {
+    expect(() => decodeClientSettings({ afterFork: "delete-source" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ afterFork: "delete-source" })).toThrow();
   });
 });
 

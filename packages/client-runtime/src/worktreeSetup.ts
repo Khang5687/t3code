@@ -1,6 +1,8 @@
 import {
+  FORK_HISTORY_MESSAGE_PREFIX,
   WORKTREE_SETUP_ACTIVITY_KIND,
   WorktreeSetupSnapshot,
+  worktreeSetupHandedOff,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -59,6 +61,29 @@ export function resolveVisibleWorktreeSetup(input: {
   return snapshot.stages.some((stage) => stage.status === "failed") ? snapshot : null;
 }
 
-export function worktreeSetupAgentStarted(snapshot: WorktreeSetupSnapshot): boolean {
-  return snapshot.stages.some((stage) => stage.id === "agent" && stage.status === "done");
+export { worktreeSetupHandedOff };
+
+/**
+ * A user message this thread sent itself. A fork's copied history predates
+ * its setup, so it neither anchors the setup card nor counts as a follow-up.
+ */
+export function isOwnUserMessage(message: { readonly id: string; readonly role: string }): boolean {
+  return message.role === "user" && !message.id.startsWith(FORK_HISTORY_MESSAGE_PREFIX);
+}
+
+/**
+ * Why a fork cannot take a send after its setup, or null. A fork whose setup
+ * failed or was cancelled never got the worktree it was made for, and running
+ * in the project root instead would be the wrong tree. It is deleted, not used.
+ */
+export function strandedForkSendBlockReason(
+  snapshot: WorktreeSetupSnapshot | null,
+  thread: { readonly forkedFrom?: unknown; readonly worktreePath: string | null } | null,
+): string | null {
+  return snapshot !== null &&
+    (snapshot.phase === "failed" || snapshot.phase === "cancelled") &&
+    thread?.forkedFrom != null &&
+    thread.worktreePath === null
+    ? "This fork has no worktree"
+    : null;
 }

@@ -27,10 +27,12 @@ import {
 import {
   DpopFailureReason,
   AuthSessionId,
+  PortSchema,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { ListenInterfaces } from "./exposure.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
@@ -209,6 +211,54 @@ export class EnvironmentResourceNotFoundError extends Schema.TaggedError<Environ
 
   override get message(): string {
     return `The environment could not find what this request named (${this.reason}).`;
+  }
+}
+
+/**
+ * What the server should be listening on (ADR 0003, Amendment 1). The client
+ * sends the selection, never resolved addresses: kinds and `allow:` entries
+ * mean what the server's own interface table says they mean.
+ */
+export const ListenRebindRequest = Schema.Struct({
+  listenInterfaces: ListenInterfaces,
+  /** Absent keeps the port the server is already on. */
+  port: Schema.optionalKey(PortSchema),
+});
+export type ListenRebindRequest = typeof ListenRebindRequest.Type;
+
+export const ListenRebindResult = Schema.Struct({
+  /** Every address now bound, loopback first, as the server resolved them. */
+  addresses: Schema.Array(Schema.String),
+  port: PortSchema,
+  /** Why the bind differs from the selection, same list startup produces. */
+  warnings: Schema.Array(Schema.String),
+  /** True only when Tailscale Serve was enabled and the re-point succeeded. */
+  tailscaleServeRepointed: Schema.Boolean,
+});
+export type ListenRebindResult = typeof ListenRebindResult.Type;
+
+/**
+ * A new address refused its bind, so nothing moved: the previous listener set
+ * is still bound and still serving.
+ */
+export class EnvironmentListenRebindFailedError extends Schema.TaggedError<EnvironmentListenRebindFailedError>()(
+  "EnvironmentListenRebindFailedError",
+  {
+    code: Schema.Literal("listen_rebind_failed"),
+    address: Schema.String,
+    port: PortSchema,
+    /** The OS error code the bind refused with, for example `EADDRINUSE`. */
+    errorCode: Schema.String,
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 409 },
+) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(EnvironmentListenRebindFailedError)(this, { status: 409 });
+  }
+
+  override get message(): string {
+    return `Could not bind ${this.address}:${this.port} (${this.errorCode}); the server is still on its previous addresses.`;
   }
 }
 
@@ -615,9 +665,29 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+/**
+ * Moving the listener set is an HTTP call, not a WS RPC: the Electron main
+ * process reaches its backend over HTTP with a bearer token and has no RPC
+ * client.
+ */
+class EnvironmentListenHttpApi extends HttpApiGroup.make("listen").add(
+  HttpApiEndpoint.post("interfaces", "/api/listen/interfaces", {
+    headers: OptionalBearerHeaders,
+    payload: ListenRebindRequest,
+    success: ListenRebindResult,
+    error: [
+      EnvironmentListenRebindFailedError,
+      EnvironmentScopeRequiredError,
+      EnvironmentAuthInvalidError,
+      EnvironmentInternalError,
+    ],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
-  .add(EnvironmentConnectHttpApi) {}
+  .add(EnvironmentConnectHttpApi)
+  .add(EnvironmentListenHttpApi) {}

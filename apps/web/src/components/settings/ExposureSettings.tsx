@@ -26,7 +26,12 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { SettingsRow } from "./settingsLayout";
-import { EXPOSURE_PRESET_OPTIONS, rebindSelection, widensExposure } from "./ExposureSettings.logic";
+import {
+  EXPOSURE_PRESET_OPTIONS,
+  formatExposureApplyError,
+  rebindSelection,
+  widensExposure,
+} from "./ExposureSettings.logic";
 
 const LISTEN_INTERFACE_LABELS: Record<ListenInterfaceKind, string> = {
   loopback: "Loopback",
@@ -51,8 +56,9 @@ const describeSelection = (selection: ListenInterfaces): string =>
  * addresses and warnings all come from the desktop exposure state; this
  * component never derives a preset itself.
  *
- * Applying a selection relaunches the backend, so any change that opens a
- * non-loopback interface is confirmed first.
+ * Applying a selection rebinds the running backend in place, so running turns
+ * survive it. Any change that opens a non-loopback interface is still confirmed
+ * first, because it changes who can reach this machine.
  */
 export function ExposureSettingsRow({
   state,
@@ -92,7 +98,7 @@ export function ExposureSettingsRow({
         setAddressDraft("");
         onApplied();
       } catch (cause) {
-        setMutationError(cause instanceof Error ? cause.message : "Failed to update exposure.");
+        setMutationError(formatExposureApplyError(cause));
       } finally {
         setIsApplying(false);
         setPendingSelection(null);
@@ -332,7 +338,7 @@ export function ExposureSettingsRow({
             <AlertDialogTitle>Widen exposure?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingSelection
-                ? `T3 Code restarts to listen on ${describeSelection(pendingSelection)}. Other devices that can reach those interfaces will be able to pair.`
+                ? `T3 Code starts listening on ${describeSelection(pendingSelection)}. Other devices that can reach those interfaces will be able to pair.`
                 : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -352,10 +358,10 @@ export function ExposureSettingsRow({
               {isApplying ? (
                 <>
                   <Spinner className="size-3.5" />
-                  Restarting…
+                  Applying…
                 </>
               ) : (
-                "Restart and apply"
+                "Apply"
               )}
             </Button>
           </AlertDialogFooter>

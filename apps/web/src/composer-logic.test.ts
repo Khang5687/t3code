@@ -322,6 +322,47 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it.each([
+    { text: "foo /", query: "", rangeStart: "foo ".length },
+    { text: "foo /rev", query: "rev", rangeStart: "foo ".length },
+    { text: "(see /x", query: "x", rangeStart: "(see ".length },
+    { text: "a\n/rev after /re", query: "re", rangeStart: "a\n/rev after ".length },
+  ])("opens the skill menu for a mid-prompt slash in $text", ({ text, query, rangeStart }) => {
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "skill",
+      query,
+      rangeStart,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("keeps a slash at the start of a continuation line a slash command", () => {
+    const text = "a\n/rev";
+
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "slash-command",
+      query: "rev",
+      rangeStart: "a\n".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it.each(["src/foo", "https://x", "a/b"])("ignores a slash inside %s", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toBeNull();
+  });
+
+  it("keeps an embedded slash from changing an existing trigger", () => {
+    const text = "issue#1/2";
+
+    expect(detectComposerTrigger(text, text.length)).toBeNull();
+  });
+
+  it("makes mid-prompt / an alias of the $ skill trigger", () => {
+    expect(detectComposerTrigger("Use /rev", "Use /rev".length)).toEqual(
+      detectComposerTrigger("Use $rev", "Use $rev".length),
+    );
+  });
+
   it("detects trigger with true cursor even when regex-based mention detection would false-match", () => {
     // MENTION_TOKEN_REGEX can false-match plain text like "@in" as a mention.
     // The fix bypasses it by computing the expanded cursor from the Lexical node tree.

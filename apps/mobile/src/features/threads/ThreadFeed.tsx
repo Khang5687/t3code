@@ -38,6 +38,7 @@ import {
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
+import { isOwnUserMessage } from "@t3tools/client-runtime/worktree-setup";
 import {
   renderCodexFileCitationsAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
@@ -178,6 +179,15 @@ import {
   type PendingThreadFeedEntry,
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
+import { ControlPillMenu } from "../../components/ControlPill";
+import {
+  persistedMessageId,
+  threadForkLocationFromActionId,
+  threadMessageCopyAction,
+  threadMessageMenuActions,
+  timelineRowRecordRef,
+  type ThreadMessageMenu,
+} from "./thread-message-menu";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import {
   assetEnvironment,
@@ -249,6 +259,12 @@ function isFreshTimestamp(input: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
 }
 
+/** A fork's "Forked from" line; `onPress` is null once the source is gone. */
+export interface ForkedFromLine {
+  readonly label: string;
+  readonly onPress: (() => void) | null;
+}
+
 export interface ThreadFeedProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
@@ -279,6 +295,8 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
+  readonly messageMenu?: ThreadMessageMenu | null;
+  readonly forkedFrom?: ForkedFromLine | null;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: {
     readonly loading: boolean;
@@ -1355,6 +1373,67 @@ function useMarkdownStyles(
     userBubbleForegroundMuted,
     userBubbleSkillForeground,
   ]);
+}
+
+/**
+ * Wraps one rendered feed row in the shared long-press menu. A row with no
+ * actions renders bare rather than opening an empty sheet, which keeps the
+ * native menu view off the fold, toggle and thinking rows — every row the
+ * server has recorded now carries the copy items, so it is no longer off
+ * most of a long thread.
+ */
+function ThreadFeedRowMenu(props: {
+  readonly entry: PendingThreadFeedEntry;
+  readonly threadId: ThreadId;
+  readonly menu: ThreadMessageMenu | null | undefined;
+  readonly children: ReactNode;
+}) {
+  const { entry, menu, threadId } = props;
+  const messageId = persistedMessageId(entry);
+  const message = entry.type === "message" ? entry.message : null;
+  const record = useMemo(() => timelineRowRecordRef(entry), [entry]);
+  const actions = useMemo(
+    () =>
+      threadMessageMenuActions({
+        row: { role: message?.role ?? null, persistedMessageId: messageId, record },
+        forkSupported: menu?.forkSupported ?? false,
+        newWorktreeEligible:
+          messageId !== null && (menu?.newWorktreeMessageIds.has(messageId) ?? false),
+      }),
+    [record, menu, message, messageId],
+  );
+  const handlePressAction = useCallback(
+    ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      const copy =
+        record === null ? null : threadMessageCopyAction(nativeEvent.event, { threadId, record });
+      if (copy !== null) {
+        copyTextWithHaptic(copy.text, { target: copy.target });
+        return;
+      }
+      const location = threadForkLocationFromActionId(nativeEvent.event);
+      if (location === null || menu == null || message === null || messageId === null) return;
+      menu.onFork(
+        {
+          id: messageId,
+          text: message.text,
+          attachments: message.attachments ?? [],
+        },
+        location,
+      );
+    },
+    [record, menu, message, messageId, threadId],
+  );
+
+  if (actions.length === 0) {
+    return props.children;
+  }
+  return (
+    <ControlPillMenu actions={actions} onPressAction={handlePressAction} shouldOpenOnLongPress>
+      {/* The anchor must own a press gesture: Android's menu injects
+          `onLongPress` into this child, and a plain View would drop it. */}
+      <Pressable>{props.children}</Pressable>
+    </ControlPillMenu>
+  );
 }
 
 function renderFeedEntry(
@@ -2501,8 +2580,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.latestTurn,
     ],
   );
+  // A fork's copied history predates its setup; its card goes in the footer.
   const setupAnchorIndex = presentedFeed.findIndex(
-    (entry) => entry.type === "message" && entry.message.role === "user",
+    (entry) => entry.type === "message" && isOwnUserMessage(entry.message),
   );
   // The empty↔filled key below remounts the list and resets its imperative
   // content-inset override. Seed the fresh instance synchronously with the
@@ -2781,41 +2861,43 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         entering={disclosureToggleSettling ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION : undefined}
       >
         <ThreadMediaVisibility>
-          {renderFeedEntry(info, {
-            environmentId: props.environmentId,
-            dispatchingMessageId: props.dispatchingMessageId,
-            onEditPendingMessage: props.onEditPendingMessage,
-            onRemoveQueuedTurn: props.onRemoveQueuedTurn,
-            copiedRowId,
-            expandedWorkRows,
-            expandedReasoningMessageIds,
-            workRowSizing,
-            workGroupScrollPositions,
-            terminalAssistantMessageIds,
-            unsettledTurnId,
-            isWorking: props.activeWorkStartedAt !== null,
-            onCopyWorkRow,
-            onToggleWorkGroup,
-            onToggleWorkRow,
-            onToggleTurnFold,
-            onToggleReasoning,
-            onPressPreview,
-            onPressVideo,
-            markdownLinkHandlers,
-            renderMarkdownImage,
-            renderViewedImage,
-            iconSubtleColor,
-            screenColor,
-            userBubbleColor,
-            markdownStyles,
-            reviewCommentColors,
-            reviewCommentBubbleWidth,
-            themeAppearance,
-            userBubbleMaxWidth,
-            markdownContentWidth,
-            skills: props.skills,
-            onUseArtifactTemplate: props.onUseArtifactTemplate,
-          })}
+          <ThreadFeedRowMenu entry={info.item} threadId={props.threadId} menu={props.messageMenu}>
+            {renderFeedEntry(info, {
+              environmentId: props.environmentId,
+              dispatchingMessageId: props.dispatchingMessageId,
+              onEditPendingMessage: props.onEditPendingMessage,
+              onRemoveQueuedTurn: props.onRemoveQueuedTurn,
+              copiedRowId,
+              expandedWorkRows,
+              expandedReasoningMessageIds,
+              workRowSizing,
+              workGroupScrollPositions,
+              terminalAssistantMessageIds,
+              unsettledTurnId,
+              isWorking: props.activeWorkStartedAt !== null,
+              onCopyWorkRow,
+              onToggleWorkGroup,
+              onToggleWorkRow,
+              onToggleTurnFold,
+              onToggleReasoning,
+              onPressPreview,
+              onPressVideo,
+              markdownLinkHandlers,
+              renderMarkdownImage,
+              renderViewedImage,
+              iconSubtleColor,
+              screenColor,
+              userBubbleColor,
+              markdownStyles,
+              reviewCommentColors,
+              reviewCommentBubbleWidth,
+              themeAppearance,
+              userBubbleMaxWidth,
+              markdownContentWidth,
+              skills: props.skills,
+              onUseArtifactTemplate: props.onUseArtifactTemplate,
+            })}
+          </ThreadFeedRowMenu>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
@@ -2859,6 +2941,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      props.messageMenu,
       props.onUseArtifactTemplate,
       props.skills,
       renderMarkdownImage,
@@ -3005,6 +3088,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             ListHeaderComponent={
               <>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
+                {props.forkedFrom != null ? (
+                  <Pressable
+                    onPress={props.forkedFrom.onPress ?? undefined}
+                    disabled={props.forkedFrom.onPress === null}
+                    accessibilityRole={props.forkedFrom.onPress === null ? "text" : "link"}
+                    className="items-center py-2"
+                  >
+                    <Text className="text-xs text-foreground-secondary" numberOfLines={1}>
+                      {props.forkedFrom.label}
+                    </Text>
+                  </Pressable>
+                ) : null}
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
                   <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
                 ) : null}
